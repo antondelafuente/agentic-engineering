@@ -211,9 +211,10 @@ GitHub is the durable coordination record, but it should read like a handoff to 
   (it has BOTH ship-change's `wf.sh` AND a verify-claims reviewer in-tree), materialized from its *base* ref
   (`origin/main`, then `main`) — current-but-never-the-branch-under-review, so a PR that edits the reviewer
   cannot run its own modified reviewer as the merge gate (exercised only after it lands), and self-review of
-  agentic-engineering stays protected; (3) the **co-installed** verify-claims (plugin cache / Claude+Codex skill
-  installs) for installed-plugin-cache execution where the script-dir checkout isn't the source; else fail
-  closed (never the repo-under-review's reviewer). The base-ref copy is cached under the git-common-dir keyed by
+  agentic-engineering stays protected; the resolved reviewer must carry the SWE modes (`--scaffold`) or it's
+  rejected. **Anything else fails closed → set `AUDIT_EXPERIMENT`** (the explicit escape for non-checkout /
+  installed-plugin-cache execution); ship-change runs from the agentic-engineering checkout, and we never guess
+  an arbitrary on-disk verify-claims as the merge gate. The base-ref copy is cached under the git-common-dir keyed by
   the base commit. The **constitution** (`AGENTS.md`) is a *separate* knob and still comes from the **target**
   repo, so reviews judge the repo-under-review's own conventions with agentic-engineering's review engine.
   `wf.sh locate-audit --swe` prints the SWE reviewer; bare `wf.sh locate-audit [repo]` prints the

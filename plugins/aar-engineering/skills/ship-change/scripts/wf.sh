@@ -205,9 +205,11 @@ locate_audit(){  # locate_audit [context-repo-dir]
 #   3. else fail closed — never silently fall through to the repo-under-review's reviewer.
 locate_swe_audit(){
   if [ -n "${AUDIT_EXPERIMENT:-}" ] && [ -f "$AUDIT_EXPERIMENT" ]; then echo "$AUDIT_EXPERIMENT"; return; fi
-  local cand="" out self_dir root sib
-  # 1. agentic-engineering's own checkout, marker-validated (BOTH ship-change + verify-claims in-tree),
-  #    materialized from its BASE ref (never the branch under review). The checkout-execution path (this box).
+  local out cand=""
+  # agentic-engineering's own checkout, marker-validated (it carries BOTH ship-change's wf.sh AND a
+  # verify-claims reviewer in-tree — a combination no other repo has post-cutover), materialized from its
+  # BASE ref via audit_from_base_ref (never the branch under review → self-review safety preserved). This is
+  # the supported execution model: ship-change runs from the agentic-engineering checkout (--plugin-dir).
   if [ -n "$SELF_REPO" ] \
        && [ -f "$SELF_REPO/plugins/aar-engineering/skills/ship-change/scripts/wf.sh" ] \
        && [ -f "$SELF_REPO/plugins/verify-claims/skills/verify-claims/scripts/audit_experiment.sh" ]; then
@@ -217,21 +219,13 @@ locate_swe_audit(){
       die "could not safely resolve the SWE reviewer from agentic-engineering's base ref (verify-claims present but extraction failed) — failing closed; set AUDIT_EXPERIMENT to override"
     fi
   fi
-  # 2. installed-plugin-cache execution: the verify-claims CO-INSTALLED beside THIS exact ship-change (its
-  #    sibling under the same package root), resolved from wf.sh's own dir — NOT an arbitrary verify-claims
-  #    found anywhere on disk (which could be the repo-under-review's trimmed, experiment-only copy).
-  if [ -z "$cand" ]; then
-    self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)
-    root=${self_dir%/aar-engineering/skills/ship-change/scripts}
-    if [ -n "$self_dir" ] && [ "$root" != "$self_dir" ]; then   # suffix stripped => standard package layout
-      sib="$root/verify-claims/skills/verify-claims/scripts/audit_experiment.sh"
-      [ -f "$sib" ] && cand="$sib"
-    fi
-  fi
-  # 3. the resolved reviewer MUST carry the SWE modes — a trimmed experiment-only verify-claims must never
-  #    become the merge gate. Validate the marker and fail closed otherwise (never a silent wrong-engine gate).
-  if [ -n "$cand" ] && [ -f "$cand" ] && grep -q 'MODE=scaffold' "$cand" 2>/dev/null; then echo "$cand"; return; fi
-  die "cannot locate an SWE-capable verify-claims (agentic-engineering's, carrying --scaffold/--code): SELF_REPO is not an agentic-engineering checkout and none is co-installed beside ship-change; set AUDIT_EXPERIMENT to override"
+  # The resolved reviewer MUST carry the SWE modes — a trimmed experiment-only verify-claims must never become
+  # the merge gate.
+  if [ -n "$cand" ] && grep -q 'MODE=scaffold' "$cand" 2>/dev/null; then echo "$cand"; return; fi
+  # Anything else (e.g. installed-plugin-cache execution where SELF_REPO is not the agentic-engineering
+  # checkout) must be configured EXPLICITLY — we never guess an arbitrary on-disk verify-claims as the
+  # merge-gate engine (it could be the repo-under-review's trimmed copy, or any cache layout we'd be guessing).
+  die "cannot resolve the SWE reviewer: wf.sh is not running from an agentic-engineering checkout (SELF_REPO lacks the ship-change+verify-claims marker, or its verify-claims has no --scaffold). Point AUDIT_EXPERIMENT at agentic-engineering's verify-claims audit_experiment.sh."
 }
 
 check_author(){

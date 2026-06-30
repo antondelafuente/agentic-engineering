@@ -27,10 +27,13 @@ when wf.sh runs from a checkout, not from the installed plugin cache). It resolv
 1. `AUDIT_EXPERIMENT` override (same escape hatch as `locate_audit`).
 2. `SELF_REPO` **only when it is a genuine agentic-engineering checkout** — validated by a marker no other
    repo carries post-cutover: it has BOTH `ship-change`'s `wf.sh` AND a `verify-claims` reviewer in-tree —
-   materialized from its BASE ref (never the branch under review → self-review safety preserved).
-3. else the **co-installed** `verify-claims` (plugin cache / Claude+Codex skills) — the engine shipped
-   alongside ship-change, i.e. agentic-engineering's, for installed-plugin-cache execution.
-4. else fail closed — never silently fall through to the repo-under-review's reviewer.
+   materialized from its BASE ref (never the branch under review → self-review safety preserved). The resolved
+   reviewer must carry the SWE modes (`MODE=scaffold`) or it is rejected.
+3. else **fail closed → set `AUDIT_EXPERIMENT`**. ship-change runs from the agentic-engineering checkout
+   (the supported execution model); for non-checkout / installed-plugin-cache execution the operator points
+   `AUDIT_EXPERIMENT` at agentic-engineering's reviewer. We deliberately do NOT auto-guess an arbitrary on-disk
+   `verify-claims` as the merge-gate engine — it could be the repo-under-review's trimmed copy, or an unknown
+   cache layout. (`AUDIT_EXPERIMENT` is the same explicit escape hatch `locate_audit` already honors.)
 
 `locate_audit` is left unchanged as the general resolver, and the `wf.sh locate-audit` introspection command
 gains a `--swe` form that prints what the SWE reviews actually run, so the documented/tested interface no
