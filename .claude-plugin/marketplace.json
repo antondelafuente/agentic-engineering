@@ -1,0 +1,19 @@
+{
+  "name": "agentic-engineering",
+  "owner": { "name": "Anton de la Fuente" },
+  "metadata": {
+    "description": "The agentic engineering team: ship product/scaffold changes through a GitHub-backed, cross-family-reviewed lifecycle. General-purpose — build any software via PR-reviewed agents."
+  },
+  "plugins": [
+    {
+      "name": "aar-engineering",
+      "source": "./plugins/aar-engineering",
+      "description": "ship-change: drive a change through Issue -> worktree branch -> design doc -> draft PR -> cross-family --scaffold + --code review -> tracked .aar-ci checks -> fail-closed merge-when-clean. The agents are the engineers; one family authors, the other reviews."
+    },
+    {
+      "name": "verify-claims",
+      "source": "./plugins/verify-claims",
+      "description": "The cross-family adversarial review engine ship-change gates on: --scaffold (design review of a change proposal) + --code (implementation review of a diff), read by the OPPOSITE model family. Self-contained in this repo."
+    }
+  ]
+}
