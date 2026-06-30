@@ -17,10 +17,25 @@ it no longer supports. The reviewer source must move to agentic-engineering befo
 ## Approach
 
 The SWE review engine lives in agentic-engineering, so ship-change should always source its `--scaffold`/
-`--code` reviewer from agentic-engineering (`SELF_REPO`), independent of which repo is under review. The two
-call sites are SWE-review-only — `run_review` is only ever invoked `--scaffold`/`--code` (design-review,
-code-review, finish merge-gate) and `fresh_sweep` only `--code` (the finish backstop) — so the change is
-localized: `locate_audit "$wt"` → `locate_audit "$SELF_REPO"` in both.
+`--code` reviewer from agentic-engineering, independent of which repo is under review. The two call sites
+are SWE-review-only — `run_review` is only ever invoked `--scaffold`/`--code` (design-review, code-review,
+finish merge-gate) and `fresh_sweep` only `--code` (the finish backstop) — so both switch from
+`locate_audit "$wt"` to a new dedicated resolver, `locate_swe_audit`.
+
+`locate_swe_audit` does NOT blindly trust `SELF_REPO` (the script-dir git root is only agentic-engineering
+when wf.sh runs from a checkout, not from the installed plugin cache). It resolves fail-closed:
+1. `AUDIT_EXPERIMENT` override (same escape hatch as `locate_audit`).
+2. `SELF_REPO` **only when it is a genuine agentic-engineering checkout** — validated by a marker no other
+   repo carries post-cutover: it has BOTH `ship-change`'s `wf.sh` AND a `verify-claims` reviewer in-tree —
+   materialized from its BASE ref (never the branch under review → self-review safety preserved).
+3. else the **co-installed** `verify-claims` (plugin cache / Claude+Codex skills) — the engine shipped
+   alongside ship-change, i.e. agentic-engineering's, for installed-plugin-cache execution.
+4. else fail closed — never silently fall through to the repo-under-review's reviewer.
+
+`locate_audit` is left unchanged as the general resolver, and the `wf.sh locate-audit` introspection command
+gains a `--swe` form that prints what the SWE reviews actually run, so the documented/tested interface no
+longer lies. `locate_audit_smoke.sh` gains a `--swe` assertion (resolves to agentic-engineering's reviewer
+independent of any context repo).
 
 Two properties are preserved deliberately:
 
@@ -41,9 +56,12 @@ Two properties are preserved deliberately:
 
 ## Alternatives considered
 
-- **Make `locate_audit` mode-aware** (skip the context-repo search only for SWE modes). More machinery than
-  needed: the two callers are *already* SWE-only, so passing `SELF_REPO` at the call site is both simpler and
-  more honest about intent. `locate_audit` stays a general resolver for the `locate-audit` introspection command.
+- **Bare `locate_audit "$SELF_REPO"` at the call sites** (no dedicated resolver). Rejected by design review:
+  `SELF_REPO` is only agentic-engineering under checkout execution, not plugin-cache install, so it could
+  resolve from an arbitrary parent git repo or a stale fallback — and the `locate-audit` introspection/smoke
+  would no longer reflect what the gate runs. Hence the validated `locate_swe_audit` + `--swe` introspection.
+- **Fold SWE-mode logic into `locate_audit` itself.** Avoided: keeps `locate_audit` a clean general resolver;
+  the SWE-specific policy (agentic-engineering-only, marker-validated) is a separate, named concern.
 - **Leave automated-researcher's verify-claims full** (don't trim, skip this change). Rejected: it leaves the
   SWE review engine duplicated inside the research product, which is exactly the boundary Phase 3 removes.
 

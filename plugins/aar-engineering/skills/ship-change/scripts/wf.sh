@@ -190,6 +190,37 @@ locate_audit(){  # locate_audit [context-repo-dir]
   echo "$hit"
 }
 
+# locate_swe_audit — the reviewer for SWE reviews (--scaffold/--code). UNLIKE locate_audit, this is
+# DELIBERATELY independent of the repo under review: the SWE review engine lives in agentic-engineering
+# (alongside ship-change), not in the product/research repo being changed (automated-researcher #255, Phase
+# 3b — the repo under review may carry only the experiment-audit modes). Fail-closed resolution:
+#   0. AUDIT_EXPERIMENT override (same escape hatch as locate_audit).
+#   1. SELF_REPO ONLY when it is a genuine agentic-engineering checkout — validated by a marker no other repo
+#      carries post-cutover: it has BOTH ship-change's wf.sh AND a verify-claims reviewer in-tree. Materialized
+#      from its BASE ref via audit_from_base_ref (never the branch under review → self-review safety preserved).
+#      SELF_REPO is the script-dir git root, which is agentic-engineering only under CHECKOUT execution — the
+#      marker is why we don't blindly trust it under installed-plugin-cache execution.
+#   2. else the co-installed verify-claims (plugin cache / Claude+Codex skills) — the engine shipped ALONGSIDE
+#      ship-change (agentic-engineering's), for installed-plugin-cache execution where SELF_REPO is not it.
+#   3. else fail closed — never silently fall through to the repo-under-review's reviewer.
+locate_swe_audit(){
+  if [ -n "${AUDIT_EXPERIMENT:-}" ] && [ -f "$AUDIT_EXPERIMENT" ]; then echo "$AUDIT_EXPERIMENT"; return; fi
+  local out hit
+  if [ -n "$SELF_REPO" ] \
+       && [ -f "$SELF_REPO/plugins/aar-engineering/skills/ship-change/scripts/wf.sh" ] \
+       && [ -f "$SELF_REPO/plugins/verify-claims/skills/verify-claims/scripts/audit_experiment.sh" ]; then
+    if out=$(audit_from_base_ref "$SELF_REPO"); then
+      [ -n "$out" ] && { echo "$out"; return; }
+    else
+      die "could not safely resolve the SWE reviewer from agentic-engineering's base ref (verify-claims present but extraction failed) — failing closed; set AUDIT_EXPERIMENT to override"
+    fi
+  fi
+  hit=$(find "$HOME/.claude/plugins/cache" "$HOME/.claude/skills" "$HOME/.codex/skills" \
+        -path '*verify-claims*scripts/audit_experiment.sh' 2>/dev/null | sort -V | tail -1 || true)
+  [ -n "$hit" ] && { echo "$hit"; return; }
+  die "cannot locate the SWE reviewer (agentic-engineering's verify-claims): SELF_REPO is not an agentic-engineering checkout (no ship-change+verify-claims marker) and no installed verify-claims found; set AUDIT_EXPERIMENT to override"
+}
+
 check_author(){
   case "$1" in
     claude|codex) ;;
@@ -749,7 +780,9 @@ fd_save(){  # fd_save <wt> <repo> <pr> <tok> [allow_advance:0|1]
 # semantically adjudicates it. A sweep failure is non-fatal (the disposition-aware gate still runs).
 fresh_sweep(){  # fresh_sweep <wt> <author> <mode> <target> <pr>  -> echoes the artifact path (best-effort)
   local wt=$1 author=$2 mode=$3 target=$4 pr=$5
-  local audit rev; audit=$(locate_audit "$wt")
+  # SWE reviewer (the --code finish backstop) comes from agentic-engineering, NOT the repo under review
+  # (Phase 3b); the constitution below still comes from the target repo's AGENTS.md.
+  local audit rev; audit=$(locate_swe_audit)
   rev="${TMPDIR:-/tmp}/wf_fresh_$(wt_branch "$wt" | tr '/' '_').md"
   rm -f "$rev"   # never reuse a stale sweep
   local audit_env=()
@@ -1564,7 +1597,10 @@ reviewer_token(){  # reviewer_token <author> [required:0|1]
 # review can't satisfy branch protection before finish's checks + final-SHA review have run.
 run_review(){  # run_review <mode> <worktree> <author> <target> <pr> <heading> [approving]
   local mode=$1 wt=$2 author=$3 target=$4 pr=$5 heading=$6 approving=${7:-0}
-  local audit rev; audit=$(locate_audit "$wt")
+  # SWE reviewer (--scaffold/--code) comes from agentic-engineering, NOT the repo under review (Phase 3b);
+  # the constitution below still comes from the target repo's AGENTS.md ($wt), so reviews judge the
+  # repo-under-review's own conventions with agentic-engineering's review engine.
+  local audit rev; audit=$(locate_swe_audit)
   rev="${TMPDIR:-/tmp}/wf_${mode#--}_$(wt_branch "$wt" | tr '/' '_').md"
   local rtok="" require_reviewer=0
   # Any posted workflow review/comment should use the opposite-family engineer identity by default, not the
@@ -1781,8 +1817,11 @@ uninstall-gh-guard)  # wf.sh uninstall-gh-guard [bindir] — remove the gh write
   fi
   ;;
 
-locate-audit)  # wf.sh locate-audit [context-repo] — print the verify-claims reviewer wf.sh would run (introspection/test)
-  locate_audit "${1:-}" ;;
+locate-audit)  # wf.sh locate-audit [context-repo] | locate-audit --swe — print the verify-claims reviewer wf.sh
+               # would run (introspection/test). --swe prints the SWE-review (--scaffold/--code) reviewer, which
+               # comes from agentic-engineering independent of the context repo (Phase 3b); bare form prints the
+               # experiment-audit resolver (context-repo-first), as before.
+  if [ "${1:-}" = "--swe" ]; then locate_swe_audit; else locate_audit "${1:-}"; fi ;;
 
 doctor)  # wf.sh doctor <author> [repo-or-worktree] [--readonly] — report lifecycle identity readiness without printing tokens.
   # --readonly: run ONLY the read-only-ambient detector (#166) and EXIT NON-ZERO on any FAIL/FAIL-CLOSED —

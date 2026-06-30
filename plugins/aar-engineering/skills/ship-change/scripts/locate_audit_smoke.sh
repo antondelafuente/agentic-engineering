@@ -134,5 +134,19 @@ check "override is returned when AUDIT_EXPERIMENT is set"  "[ \"$out6\" = OVERRI
 got6b=$(bash "$WF" locate-audit "$WT" 2>/dev/null); out6b=$(bash "$got6b" 2>/dev/null)
 check "with override cleared, resolver (not the override) is used" "[ \"$out6b\" != OVERRIDE-REVIEWER ] && [ -n \"$out6b\" ]"
 
+echo "=== (8-swe) locate_swe_audit / 'locate-audit --swe': the SWE (--scaffold/--code) reviewer comes from"
+echo "    agentic-engineering (ship-change's own repo), INDEPENDENT of the repo under review (Phase 3b, #255) ==="
+# Runs the real wf.sh, so SELF_REPO = the agentic-engineering checkout that owns this smoke (marker-validated:
+# it carries BOTH ship-change and verify-claims in-tree), materialized from its BASE ref.
+swe=$(bash "$WF" locate-audit --swe 2>/dev/null)
+check "locate-audit --swe resolves a reviewer file"                 "[ -n \"$swe\" ] && [ -f \"$swe\" ]"
+check "locate-audit --swe reviewer is SWE-capable (has --scaffold)" "grep -q 'MODE=scaffold' \"$swe\" 2>/dev/null"
+# Independence: --swe ignores any context-repo arg, even one whose own verify-claims is poisoned — proving the
+# SWE reviewer is NOT sourced from the repo under review.
+POISON="$TMP/poison-ctx"; seed_vc "$POISON" POISONED-CTX; git_repo_with_origin "$POISON"
+swe2=$(bash "$WF" locate-audit --swe "$POISON" 2>/dev/null)
+check "locate-audit --swe ignores the context repo (uses agentic-engineering, not the poisoned context)" \
+      "[ \"$swe2\" = \"$swe\" ] && [ \"$(bash \"$swe2\" 2>/dev/null)\" != POISONED-CTX ]"
+
 echo
 [ "$fail" = 0 ] && { echo "locate_audit smoke: ALL PASS"; exit 0; } || { echo "locate_audit smoke: FAILURES" >&2; exit 1; }
