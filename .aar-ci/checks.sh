@@ -1,5 +1,5 @@
 #!/bin/bash
-# automated-researcher deterministic checks + behavior smoke. TRACKED check profile (run by ship_change.sh).
+# agentic-engineering deterministic checks + behavior smoke. TRACKED check profile (run by ship_change.sh).
 # Args: the changed paths being shipped. Runs from the repo root. Exit non-zero on ANY failure.
 # The pyramid: cheap deterministic checks first, then the fake-HOME behavior smoke for plugin/skill changes.
 set -uo pipefail
@@ -12,7 +12,7 @@ changed_under(){ local pfx=$1; printf '%s\n' "${PATHS[@]}" | grep -q "^$pfx" ; }
 
 ROOT="$(git rev-parse --show-toplevel)"
 
-echo "[checks] automated-researcher — ${#PATHS[@]} path(s)" >&2
+echo "[checks] agentic-engineering — ${#PATHS[@]} path(s)" >&2
 
 # 1. JSON validity (manifests/marketplace)
 for p in "${PATHS[@]}"; do case "$p" in

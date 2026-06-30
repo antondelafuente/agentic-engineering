@@ -1,4 +1,4 @@
-# automated-researcher CI profile (sourced by ship_change.sh). TRACKED — not hidden local config.
-# automated-researcher should usually be clean, so strict: refuse to ship if any file outside the named
+# agentic-engineering CI profile (sourced by ship_change.sh). TRACKED — not hidden local config.
+# agentic-engineering should usually be clean, so strict: refuse to ship if any file outside the named
 # changed-path list is dirty. (Shared lab repos like orchestrator use DIRTY_POLICY=quiescence instead.)
 DIRTY_POLICY=strict

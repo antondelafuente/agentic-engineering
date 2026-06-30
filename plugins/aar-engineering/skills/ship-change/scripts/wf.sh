@@ -2368,7 +2368,10 @@ finish) # wf.sh finish <worktree> <author>   — checks + fail-closed --code mer
   fi
   git -C "$MAIN_CO" pull --ff-only -q origin main 2>/dev/null || note "WARN: could not ff-only pull main ($MAIN_CO) — reconcile manually"
   local_manifest=0; for p in "${PATHS[@]}"; do case "$p" in */plugin.json|*marketplace.json) local_manifest=1;; esac; done
-  [ "$local_manifest" = 1 ] && note "a plugin manifest changed — refresh installs: claude plugin marketplace update automated-researcher && claude plugin update <name>@automated-researcher"
+  if [ "$local_manifest" = 1 ]; then
+    mp_name="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['name'])" "$MAIN_CO/.claude-plugin/marketplace.json" 2>/dev/null || echo '<marketplace>')"
+    note "a plugin manifest changed — refresh installs: claude plugin marketplace update $mp_name && claude plugin update <name>@$mp_name"
+  fi
   echo "SHIPPED: PR #$PR merged (opposite-family review gate + checks). Worktree cleaned."
   ;;
 

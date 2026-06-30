@@ -26,10 +26,10 @@ to require yet. Wiring the checks as a GitHub-required status is a tracked follo
 
 ## Engineer identities (as-built)
 
-- **`codex-engineer`** — a GitHub App, installed on `automated-researcher`. It can author Codex work and review
+- **`codex-engineer`** — a GitHub App, installed on `agentic-engineering`. It can author Codex work and review
   Claude-authored changes. This instance currently exposes its token through the legacy `WF_REVIEWER_TOKEN_CMD`
   seam, which `wf.sh` treats as a fallback alias for `WF_ENGINEER_TOKEN_CMD_CODEX`.
-- **`claude-engineer`** — a GitHub App, installed on `automated-researcher` (its token seam `WF_ENGINEER_TOKEN_CMD_CLAUDE`
+- **`claude-engineer`** — a GitHub App, installed on `agentic-engineering` (its token seam `WF_ENGINEER_TOKEN_CMD_CLAUDE`
   + `WF_ENGINEER_GIT_AUTHOR_CLAUDE` are wired on this box). It authors Claude work and reviews Codex-authored
   changes — verified live: it posted the cross-family reviews on PR #57 and authored issue #62 (both read as
   `claude-code-engineer[bot]` / `app/claude-code-engineer`).
@@ -145,7 +145,7 @@ git -C <repo> revert <merge-commit-sha>        # creates a revert commit
 ```
 
 If a plugin manifest changed, after a revert/merge refresh installed plugins:
-`claude plugin marketplace update automated-researcher && claude plugin update <name>@automated-researcher`.
+`claude plugin marketplace update <marketplace> && claude plugin update <name>@<marketplace>`.
 
 ## Follow-ups (not yet built)
 
