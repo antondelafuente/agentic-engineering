@@ -18,7 +18,7 @@ This change also **verifies Phase 2**: it ships through the now-protected agenti
 
 ## Blast radius
 
-Cosmetic labels + one functional fix (the dynamic hint). No change to the lifecycle behavior. Reversible. Deeper SKILL.md cross-reference cleanup (the "Two layers" pointer) is deferred and noted.
+Cosmetic labels + one functional fix (the dynamic hint). No change to the lifecycle behavior. Reversible. SKILL.md cross-references fixed to local pointers. Narrowing the `.aar-ci` check profile (it still carries dead research-plugin checks gated on non-existent plugin paths) is a tracked follow-up.
 
 ## Rollout + rollback
 
