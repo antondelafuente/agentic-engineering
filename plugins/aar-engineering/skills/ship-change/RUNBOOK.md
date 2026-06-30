@@ -151,3 +151,7 @@ If a plugin manifest changed, after a revert/merge refresh installed plugins:
 
 - **`.aar-ci` checks as GitHub-required status checks** — a GitHub Action that runs the
   checks and reports a status, so branch protection can require them (today they're driver-side only).
+
+## Self-hosting
+
+agentic-engineering ships its own changes through this `ship-change` (self-hosted). From Phase 2 on, its `main` is branch-protected like any product repo.
