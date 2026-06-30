@@ -203,14 +203,22 @@ GitHub is the durable coordination record, but it should read like a handoff to 
 
 ## Composes
 
-- **verify-claims `--scaffold` / `--code`** — the cross-family design + code reviewers. Same engine the
-  research audits use. **Reviewer resolution (`locate_audit`), in order:** (1) `AUDIT_EXPERIMENT=<path>`
-  manual override; (2) **trusted-but-current** — the context repo's verify-claims materialized from its
-  *base* ref (`origin/main`, then `main`), so the reviewer matches what merges (not a stale install cache)
-  yet is never supplied by the branch under review (a PR that edits the reviewer cannot run its own modified
-  reviewer as the merge gate; such a change is exercised only after it lands); (3) the installed plugin
-  (Claude plugin cache / Claude/Codex skill installs) for a repo-less invocation or a repo with no
-  verify-claims in-tree. The base-ref copy is cached under the repo's git-common-dir keyed by the base commit.
+- **verify-claims `--scaffold` / `--code`** — the cross-family design + code reviewers. For SWE reviews the
+  review **engine comes from agentic-engineering itself, NOT the repo under review** (`locate_swe_audit`,
+  Phase 3b / #255): the SWE-review modes live with ship-change, and the repo being changed may carry only the
+  experiment-audit modes. **SWE reviewer resolution (`locate_swe_audit`), fail-closed:** (1) `AUDIT_EXPERIMENT=<path>`
+  override; (2) **agentic-engineering's own checkout**, validated by a marker no other repo carries post-cutover
+  (it has BOTH ship-change's `wf.sh` AND a verify-claims reviewer in-tree), materialized from its *base* ref
+  (`origin/main`, then `main`) — current-but-never-the-branch-under-review, so a PR that edits the reviewer
+  cannot run its own modified reviewer as the merge gate (exercised only after it lands), and self-review of
+  agentic-engineering stays protected; the resolved reviewer must carry the SWE modes (`--scaffold`) or it's
+  rejected. **Anything else fails closed → set `AUDIT_EXPERIMENT`** (the explicit escape for non-checkout /
+  installed-plugin-cache execution); ship-change runs from the agentic-engineering checkout, and we never guess
+  an arbitrary on-disk verify-claims as the merge gate. The base-ref copy is cached under the git-common-dir keyed by
+  the base commit. The **constitution** (`AGENTS.md`) is a *separate* knob and still comes from the **target**
+  repo, so reviews judge the repo-under-review's own conventions with agentic-engineering's review engine.
+  `wf.sh locate-audit --swe` prints the SWE reviewer; bare `wf.sh locate-audit [repo]` prints the
+  experiment-audit resolver (`locate_audit`, context-repo-first), still used by the experiment lifecycle.
 - **gh** — Issues, draft PR, PR comments, merge. The ambient `gh` credential (`gh auth login` / `GH_TOKEN`)
   must be **read-only**; writes flow through the engineer token path, and `wf.sh doctor … --readonly` confirms
   the ambient credential is authoritatively read-only (API + git-push, per-source, non-mutating; fails closed
