@@ -64,6 +64,7 @@ case "${1:-}" in
     case "${2:-}" in
       view) echo "7"; exit 0 ;;
       comment) cat >/dev/null; echo "comment-ok"; exit 0 ;;
+      create) cat >/dev/null 2>&1; echo "https://github.com/example/repo/pull/7"; exit 0 ;;
       *) echo "fake gh: unsupported pr $*" >&2; exit 1 ;;
     esac ;;
   *) echo "fake gh: unsupported $*" >&2; exit 1 ;;
@@ -104,6 +105,38 @@ echo "$out"
 check "open exits nonzero without engineer token env" "[ $rc -ne 0 ]"
 check "open failure names the token seam" "grep -q 'WF_ENGINEER_TOKEN_CMD_CODEX' <<<\"\$out\""
 check "open failure names the ambient override" "grep -q 'WF_ALLOW_AMBIENT_IDENTITY=1' <<<\"\$out\""
+
+echo "=== open on a change/ branch with an ENTIRELY-UNTRACKED proposals/ derives the scaffolded doc (#13) ==="
+# Regression guard: when proposals/ has no tracked files, `git status --porcelain proposals/` collapses to the
+# bare `?? proposals/` dir entry. The old `open` doc-derivation picked that up → DOC="proposals/" → a garbage
+# `design: proposals (#proposals)` commit + whole-dir `git add`. The branch-derived path must select the real doc.
+UT_REPO="$TMP/untracked-repo"; mkdir -p "$UT_REPO"
+( cd "$UT_REPO" && git init -q && git remote add origin https://github.com/example/repo.git )
+( cd "$UT_REPO" && git remote set-url --push origin "file://$REMOTE" )
+printf '# test constitution\n' > "$UT_REPO/AGENTS.md"
+( cd "$UT_REPO" && git add AGENTS.md && git commit -qm base && git push -q -u origin main && git checkout -q -b change/13-untracked )
+mkdir -p "$UT_REPO/proposals"   # created but NOT git-added — proposals/ stays entirely untracked
+cat > "$UT_REPO/proposals/13-untracked.md" <<'EOF'
+# Proposal: untracked doc path (#13)
+
+## Problem
+
+reproduce the untracked proposals/ derivation bug
+
+## Approach
+
+derive the design-doc path from the change/<issue>-<slug> branch name
+EOF
+: > "$GH_FAKE_LOG"
+out=$(GH_TOKEN=ambient-token \
+  WF_ENGINEER_TOKEN_CMD_CLAUDE='printf claude-token' \
+  WF_ENGINEER_GIT_AUTHOR_CLAUDE='Claude Engineer <claude@example.com>' \
+  bash "$WF" open "$UT_REPO" claude 2>&1); rc=$?
+echo "$out"
+check "open exits zero on untracked proposals/ (change/ branch)" "[ $rc -eq 0 ]"
+check "open committed the scaffolded doc, not the bare dir" "( cd \"$UT_REPO\" && git log -1 --format=%s | grep -qF 'design: 13-untracked (#13)' )"
+check "open did not derive a garbage 'proposals' issue" "( cd \"$UT_REPO\" && ! git log -1 --format=%s | grep -qF 'design: proposals' )"
+check "open staged exactly the one doc file" "[ \"\$(cd \"$UT_REPO\" && git show --name-only --format= HEAD)\" = 'proposals/13-untracked.md' ]"
 
 echo "=== configured engineer env: doctor is ready ==="
 out=$(GH_TOKEN=ambient-token \

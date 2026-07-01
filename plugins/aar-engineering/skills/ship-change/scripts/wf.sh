@@ -1986,8 +1986,20 @@ open)   # wf.sh open <worktree> <author>   — commit the design doc, push, open
     missing_identity_die "open requires an author family (claude|codex) for engineer attribution"
   fi
   BR=$(wt_branch "$WT")
-  DOC=$(cd "$WT" && git status --porcelain proposals/ | sed 's/^...//' | head -1)
-  [ -n "$DOC" ] || DOC=$(cd "$WT" && git diff --name-only "$(base_ref "$WT")"...HEAD -- proposals/ | head -1)
+  # Design-doc path: derive it DETERMINISTICALLY from the branch, not from `git status` on the dir. `start`
+  # creates branch change/<issue>-<slug> AND scaffolds proposals/<issue>-<slug>.md, so the branch names the
+  # doc exactly. The old `git status --porcelain proposals/` primary broke on a fresh/untracked proposals/:
+  # git COLLAPSES an entirely-untracked dir to the single entry `?? proposals/`, so DOC became the bare string
+  # `proposals/` → garbage ISSUE, `design: proposals (#proposals)` commit, whole-dir `git add`.
+  DOC=""
+  case "$BR" in
+    change/*) [ -f "$WT/proposals/${BR#change/}.md" ] && DOC="proposals/${BR#change/}.md" ;;
+  esac
+  # Fallbacks for a non-standard branch or a hand-authored doc: discover via git, but FILTER to real *.md files
+  # (`|| true` keeps a no-match grep from aborting under `set -euo pipefail`) so the bare `proposals/` dir entry
+  # can never be selected — the final `die` is the only zero-doc outcome.
+  [ -n "$DOC" ] || DOC=$(cd "$WT" && git status --porcelain proposals/ | sed 's/^...//' | grep -E '\.md$' | head -1 || true)
+  [ -n "$DOC" ] || DOC=$(cd "$WT" && git diff --name-only "$(base_ref "$WT")"...HEAD -- proposals/ | grep -E '\.md$' | head -1 || true)
   [ -n "$DOC" ] || die "no design doc under proposals/ found (write proposals/<issue>-<slug>.md first)"
   ISSUE=$(basename "$DOC" | sed -E 's/^([0-9]+)-.*/\1/')
   AUTHOR_TOKEN=""; GIT_AUTHOR=""
