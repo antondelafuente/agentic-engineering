@@ -52,3 +52,13 @@ Mirror of #280; PR1 (#7) already landed, so ship-change already sources its revi
 agentic-engineering — this trim is safe now. The fleet loads verify-claims via `--plugin-dir` live source;
 sessions pick up the trimmed engine on their next restart. Reversible: a clean revert restores the removed
 modes and scripts.
+
+## Design-audit responses (--scaffold, pass 1)
+
+- **F1 (MED, right seam) — DEFERRED → #10.** ship-change's *bare* `locate_audit` (vs `locate_swe_audit`) is
+  a separate, pre-existing surface: post-PR1 every functional SWE review uses `locate_swe_audit`; the bare
+  resolver is called ONLY by the `wf.sh locate-audit` introspection subcommand. Retiring/renaming it is a
+  ship-change change, out of scope for trimming verify-claims — filed as #10. No functional regression from
+  this PR (confirmed: reviews resolve via `locate_swe_audit`).
+- **F2 (LOW, DRY) — ACCEPTED + fixed.** Removed the experiment-only `references/CALIBRATION.md` (verify_claim
+  calibration) and its SKILL.md pointer; that calibration stays only in automated-researcher's verify-claims.

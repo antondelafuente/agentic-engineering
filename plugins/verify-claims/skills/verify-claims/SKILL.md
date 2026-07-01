@@ -59,4 +59,3 @@ or retrying solely because the file has not appeared.
 - `AUDIT_DRY_RUN=1` dumps the assembled prompt without invoking a model (the CI testability seam).
 - `ship-change` supplies a disposition file at the merge-gate for a STATEFUL re-review — it judges the
   author's dispositions and surfaces only genuinely-new or invalid-disposition HIGHs.
-- Calibration provenance: see `references/CALIBRATION.md`.
