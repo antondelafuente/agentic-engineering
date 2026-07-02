@@ -9,7 +9,8 @@ AUDIT="$HERE/audit_experiment.sh"
 
 [ -f "$AUDIT" ] || { echo "FAIL: audit_experiment.sh not found at $AUDIT" >&2; exit 1; }
 
-unset AUDIT_VERIFIER_CMD AUDIT_CONSTITUTION DISPOSITION_FILE FRESH_SWEEP_FILE
+unset BASH_ENV AUDIT_VERIFIER_CMD AUDIT_CONSTITUTION DISPOSITION_FILE FRESH_SWEEP_FILE
+DRY_VERIFIER='codex exec --skip-git-repo-check --dry-run-not-executed'
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/disposition-injection-smoke.XXXXXX")
 cleanup() { rm -rf "$TMP"; }
@@ -85,18 +86,18 @@ run_prompt() {
 
   case "$variant" in
     none)
-      env -u AUDIT_VERIFIER_CMD -u AUDIT_CONSTITUTION -u DISPOSITION_FILE -u FRESH_SWEEP_FILE \
-        AAR_SUBSTRATE=claude AUDIT_DRY_RUN=1 \
+      env -u BASH_ENV -u AUDIT_CONSTITUTION -u DISPOSITION_FILE -u FRESH_SWEEP_FILE \
+        AAR_SUBSTRATE=claude AUDIT_DRY_RUN=1 AUDIT_VERIFIER_CMD="$DRY_VERIFIER" \
         bash "$AUDIT" "$flag" "$input" "$ROOT"
       ;;
     disposition)
-      env -u AUDIT_VERIFIER_CMD -u AUDIT_CONSTITUTION -u FRESH_SWEEP_FILE \
-        AAR_SUBSTRATE=claude AUDIT_DRY_RUN=1 DISPOSITION_FILE="$DISP" \
+      env -u BASH_ENV -u AUDIT_CONSTITUTION -u FRESH_SWEEP_FILE \
+        AAR_SUBSTRATE=claude AUDIT_DRY_RUN=1 AUDIT_VERIFIER_CMD="$DRY_VERIFIER" DISPOSITION_FILE="$DISP" \
         bash "$AUDIT" "$flag" "$input" "$ROOT"
       ;;
     fresh)
-      env -u AUDIT_VERIFIER_CMD -u AUDIT_CONSTITUTION \
-        AAR_SUBSTRATE=claude AUDIT_DRY_RUN=1 DISPOSITION_FILE="$DISP" FRESH_SWEEP_FILE="$FRESH" \
+      env -u BASH_ENV -u AUDIT_CONSTITUTION \
+        AAR_SUBSTRATE=claude AUDIT_DRY_RUN=1 AUDIT_VERIFIER_CMD="$DRY_VERIFIER" DISPOSITION_FILE="$DISP" FRESH_SWEEP_FILE="$FRESH" \
         bash "$AUDIT" "$flag" "$input" "$ROOT"
       ;;
     *) fail "unknown variant: $variant" ;;
