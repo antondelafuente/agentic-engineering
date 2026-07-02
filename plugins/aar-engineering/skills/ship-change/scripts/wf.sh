@@ -842,6 +842,7 @@ repo_arg_from_gh_args(){  # repo_arg_from_gh_args <fallback-repo> <gh-subcommand
     case "$a" in
       -R|--repo) want_repo=1 ;;
       -R=*) repo=${a#-R=} ;;
+      -R?*) repo=${a#-R} ;;
       --repo=*) repo=${a#--repo=} ;;
       -t|--title|-b|--body|-F|--body-file|-l|--label|-a|--assignee|-m|--milestone|-p|--project)
         want_val=1 ;;
@@ -2164,6 +2165,9 @@ issue)          # wf.sh issue <claude|codex> <gh issue args…>   — file/comme
       -*) case "${a%%=*}" in
             -R|--repo|-t|--title|-b|--body|-F|--body-file|-l|--label|-a|--assignee|-m|--milestone|-p|--project)
               case "$a" in *=*) ;; *) want_val=1 ;; esac ;;   # bare form → next token is the value
+            # gh accepts attached short-value shorthand for value flags, e.g. `-bbody`, `-Rowner/repo`,
+            # `-ttitle`. Treat the remainder as self-contained; do not consume the next argv token.
+            -[RtbFlamp]?*) ;;
             *) die "wf.sh issue: flag '$a' is not allowed on the authoring path; permitted (non-interactive create/comment): -R -t -b -F -l -a -m -p" ;;
           esac ;;
       *) ;;   # positional (subcommand, issue number)

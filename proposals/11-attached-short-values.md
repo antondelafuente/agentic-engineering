@@ -21,10 +21,18 @@ allowed only when its first character after `-` is one of the already-allowed sh
 (`R`, `t`, `b`, `F`, `l`, `a`, `m`, `p`) and at least one value character follows it. The attached value is
 self-contained, so the parser must not set `want_val` or consume the next argv token.
 
+Also update the sibling helper that interprets `-R` for the ambient-identity accountability trail.
+`repo_arg_from_gh_args` must resolve `-Rowner/repo` to the same repo as `-R owner/repo` and `-R=owner/repo`;
+otherwise a tokenless install using `WF_ALLOW_AMBIENT_IDENTITY=1` would execute the requested command but post
+its override note to the fallback repo. The nearby `issue_number_from_gh_issue_args` helper already treats
+attached short values as self-contained flags because it ignores unknown `-` tokens and does not consume the
+next positional issue number; the smoke pins that behavior for `comment -bbody 8 ...`.
+
 Add a dedicated fake-`gh` smoke for the authoring path. It should prove that `-Rexample/repo -ttitle -bbody`
-passes through on `create`, `-bbody` passes through on `comment`, an attached value before a positional issue
-number does not consume that issue number, and unallowed shorthand/bundles such as `-w`, `-we`, and `-wb`
-still fail closed. Wire the smoke into `.aar-ci/checks.sh` when `wf.sh` changes, next to the existing
+passes through on `create`, `-bbody` passes through on `comment`, attached `-Rexample/repo` is used for the
+ambient override note, an attached value before a positional issue number does not consume that issue number,
+the existing spaced and equals forms still pass, and unallowed shorthand/bundles such as `-w`, `-we`, and
+`-wb` still fail closed. Wire the smoke into `.aar-ci/checks.sh` when `wf.sh` changes, next to the existing
 maintainer-verb smoke.
 
 ## Alternatives considered
@@ -36,6 +44,9 @@ maintainer-verb smoke.
   without evidence.
 - Normalize argv before validation. The current parser only validates before handing the original argv to
   `gh`; recognizing attached-value tokens in place is smaller and avoids changing command behavior.
+- Factor all issue-flag knowledge into one shared parser helper. The flag lists are duplicated today across
+  the authoring allowlist and a few helper parsers; this change keeps the compatibility fix small, while the
+  new smoke covers the dependent helper that matters for `-R`.
 
 ## Blast radius
 
@@ -45,6 +56,10 @@ This touches only the SWE pipeline:
 - one self-contained smoke script under the same skill
 - `.aar-ci/checks.sh` wiring for that smoke
 - the `aar-engineering` plugin manifest version
+
+Within `wf.sh`, the touched behavior is the create/comment authoring allowlist plus the `repo_arg_from_gh_args`
+helper used by the ambient override note. The issue-command flag knowledge is duplicated in a few local
+parsers; this PR intentionally does not widen the maintainer verbs.
 
 It does not change product runtime behavior, branch protection, engineer-token minting, cloud-ship, or the
 maintainer verbs.
