@@ -8,7 +8,8 @@ description: >-
   change to the product scaffold (skills, plugins, CI, the constitution). The agents ARE the engineers: a
   change is authored by one family and reviewed by the OTHER. ENFORCED repos can require the --code review as
   a native opposite-family engineer review before merge. Worktree-from-the-start — never disturbs the shared
-  main checkout.
+  main checkout. When the deployment configures a Claude Code cloud environment, prefer the sibling cloud-ship
+  skill for repo-self-contained changes; ship-change is the on-box path and the fallback.
 ---
 
 # ship-change — the GitHub-backed scaffold-change lifecycle
@@ -16,6 +17,13 @@ description: >-
 The **engineering** counterpart to `run-experiment`: where `run-experiment` runs a research experiment,
 this ships a change to the *product itself*. It belongs to the **SWE pipeline** layer (see
 `AGENTS.md`), not the shipped research product.
+
+**Cloud execution, when configured.** When the deployment configures a Claude Code cloud environment, prefer
+the sibling `cloud-ship` skill for repo-self-contained changes: it runs the author + cross-family review legs
+on a cloud VM and gates the bot close on the trusted host (the box holds the engineer keys). `ship-change`
+remains the **on-box path and the fallback** — use it when the change needs box-local state, or when the cloud
+surface fails twice on the same Issue. This is **deployment-conditional**: nothing here assumes a cloud
+environment exists, and where none is configured `ship-change` is simply the path.
 
 **The agents are the engineers** (`AGENTS.md` "The vision"). Every change is **authored by one model
 family and reviewed by the OTHER** (Claude-authored → Codex reviews; vice-versa). The human is the
