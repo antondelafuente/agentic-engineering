@@ -250,6 +250,19 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/aar-engineering/skills/ship-
   fi
 fi
 
+# engineer issue-AUTHORING allowlist smoke (#11): the create/comment flag allowlist now also admits gh's
+# attached short-value shorthand (-btext, -Rowner/repo). Runs when wf.sh OR the smoke itself changed (so an
+# edit to the smoke is also exercised — same convention as the #166 read-only smoke above).
+if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/aar-engineering/skills/ship-change/scripts/(wf\.sh|issue_authoring_smoke\.sh)$'; then
+  IA_SMOKE="$ROOT/plugins/aar-engineering/skills/ship-change/scripts/issue_authoring_smoke.sh"
+  if [ -f "$IA_SMOKE" ]; then
+    echo "[checks] engineer issue-authoring allowlist smoke" >&2
+    bash "$IA_SMOKE" >&2 && ok "issue_authoring smoke" || err "issue_authoring smoke FAILED"
+  else
+    err "wf.sh/issue-authoring smoke changed but issue_authoring_smoke.sh missing — cannot verify the create/comment authoring allowlist (#11)"
+  fi
+fi
+
 # gh write-guard behavior smoke (#165): runs when the guard wrapper, the static check, or wf.sh changed.
 if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/aar-engineering/skills/ship-change/scripts/(gh-guard\.sh|gh_guard_static_check\.sh|gh_guard_smoke\.sh|wf\.sh)$'; then
   GG_SMOKE="$ROOT/plugins/aar-engineering/skills/ship-change/scripts/gh_guard_smoke.sh"

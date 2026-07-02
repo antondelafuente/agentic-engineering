@@ -843,6 +843,7 @@ repo_arg_from_gh_args(){  # repo_arg_from_gh_args <fallback-repo> <gh-subcommand
       -R|--repo) want_repo=1 ;;
       -R=*) repo=${a#-R=} ;;
       --repo=*) repo=${a#--repo=} ;;
+      -R?*) repo=${a#-R} ;;   # gh attached short form: -Rowner/repo (#11). Ordered AFTER -R=* so -R=owner/repo is not mis-stripped.
       -t|--title|-b|--body|-F|--body-file|-l|--label|-a|--assignee|-m|--milestone|-p|--project)
         want_val=1 ;;
       -t=*|--title=*|-b=*|--body=*|-F=*|--body-file=*|-l=*|--label=*|-a=*|--assignee=*|-m=*|--milestone=*|-p=*|--project=*)
@@ -2163,7 +2164,22 @@ issue)          # wf.sh issue <claude|codex> <gh issue args…>   — file/comme
     case "$a" in
       -*) case "${a%%=*}" in
             -R|--repo|-t|--title|-b|--body|-F|--body-file|-l|--label|-a|--assignee|-m|--milestone|-p|--project)
-              case "$a" in *=*) ;; *) want_val=1 ;; esac ;;   # bare form → next token is the value
+              # `=`-form is self-contained; the bare form takes the next token as its value. An EMPTY `=`-value
+              # (`-b=`, `--body=`) is NOT permitted — #11 names `-b=` as an "`=` empty-value form" that the
+              # authoring allowlist must not admit, and "preserve the existing equals forms" covers only the
+              # NON-empty `-b=text`/`--body=text`. Fail closed, same as the maintainer-verb path (#164).
+              case "$a" in
+                *=*) [ -n "${a#*=}" ] || die "wf.sh issue: flag '$a' was given an empty value (an empty '=' value is not allowed)" ;;
+                *) want_val=1 ;;
+              esac ;;
+            # gh attached short-value shorthand: -btext == -b text, also -Rowner/repo, -ttitle. Permit a
+            # single-dash token whose FIRST letter is an allowed VALUE flag (R t b F l a m p) with ≥1 char
+            # after it; that remainder is the SELF-CONTAINED value, so want_val STAYS 0 — it must never consume
+            # the following token (a positional, or importantly a disallowed flag that must still be rejected).
+            # `-b=` never reaches this arm (${a%%=*} == -b matches the exact-flag arm above, which rejects the
+            # empty `=`-value); disallowed shorthands/bundles (-w, -we, -wb) don't start with an allowed value
+            # letter → rejected.
+            -[RtbFlamp]?*) ;;
             *) die "wf.sh issue: flag '$a' is not allowed on the authoring path; permitted (non-interactive create/comment): -R -t -b -F -l -a -m -p" ;;
           esac ;;
       *) ;;   # positional (subcommand, issue number)
