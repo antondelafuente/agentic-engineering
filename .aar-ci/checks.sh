@@ -286,7 +286,21 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/aar-engineering/skills/cloud
   fi
 fi
 
-# 10. run-supervision-record smoke (#168): the monotonic state machine + fail-closed is-desired-active +
+# 10. disposition-injection smoke (#15): the retained #137/#139 disposition-aware prompt injection in
+#     audit_experiment.sh is only exercised by real ship-change reviews with prior findings. This dry-run
+#     smoke asserts the framing is injected when DISPOSITION_FILE is set, absent when unset, and still carries
+#     the nested fresh-sweep section when FRESH_SWEEP_FILE is set.
+if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/verify-claims/skills/verify-claims/scripts/(audit_experiment|disposition_injection_smoke)\.sh$'; then
+  DI_SMOKE="$ROOT/plugins/verify-claims/skills/verify-claims/scripts/disposition_injection_smoke.sh"
+  if [ -f "$DI_SMOKE" ]; then
+    echo "[checks] disposition-injection smoke" >&2
+    bash "$DI_SMOKE" >&2 && ok "disposition_injection smoke" || err "disposition-injection smoke FAILED"
+  else
+    err "audit_experiment.sh changed but disposition_injection_smoke.sh missing -- cannot verify the disposition-aware merge-gate injection (#15)"
+  fi
+fi
+
+# 11. run-supervision-record smoke (#168): the monotonic state machine + fail-closed is-desired-active +
 #     atomic writes + the update-vs-stop/close race — behavior the JSON/syntax checks can't cover. Runs
 #     when the helper or its smoke changed.
 if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/experiment-lifecycle/skills/run-experiment/scripts/run_supervision_record(_smoke)?\.sh$'; then
@@ -299,7 +313,7 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/experiment-lifecycle/skills/
   fi
 fi
 
-# 11. pod-lease + reaper smoke (#169): the 3-phase create + expiry-driven is-reapable + the locked
+# 12. pod-lease + reaper smoke (#169): the 3-phase create + expiry-driven is-reapable + the locked
 #     reap (refresh-vs-reap race) + report-unknown-never-delete + unresolved-key report-only + legacy
 #     keepalive (future/inconclusive/past) + dry-run — behavior the JSON/syntax checks can't cover.
 #     Runs when either helper or its smoke changed.

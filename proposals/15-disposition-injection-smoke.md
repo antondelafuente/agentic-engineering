@@ -29,10 +29,14 @@ modes:
 - `audit_experiment.sh --scaffold <proposal> <repo-root>`
 - `audit_experiment.sh --code <nonempty-diff> <repo-root>`
 
-For each mode, it runs once with `DISPOSITION_FILE=<json>` and asserts that the prompt contains the stateful
-review header, a prior finding description, and a disposition status marker. It then runs with
-`DISPOSITION_FILE` unset and asserts that the same disposition markers are absent. Those assertions cover the
-mode-neutral injection branch without depending on the mode-specific prompt body.
+The smoke starts by unsetting ambient reviewer and disposition env (`AUDIT_VERIFIER_CMD`,
+`AUDIT_CONSTITUTION`, `DISPOSITION_FILE`, and `FRESH_SWEEP_FILE`) so the result does not depend on the
+developer shell or CI wrapper that launched it. For each mode, it runs once with `DISPOSITION_FILE=<json>` and
+asserts that the prompt contains the stateful review header, a prior finding description, and a disposition
+status marker. It then runs with `DISPOSITION_FILE` unset and asserts that the same disposition markers are
+absent. Finally, it runs with both `DISPOSITION_FILE` and `FRESH_SWEEP_FILE` and asserts that the fresh-sweep
+candidate section is included. Those assertions cover the mode-neutral injection branch without depending on
+the mode-specific prompt body.
 
 Wire the smoke into `.aar-ci/checks.sh` when either the reviewer script or the smoke changes:
 

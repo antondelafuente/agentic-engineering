@@ -1,7 +1,7 @@
 {
   "name": "verify-claims",
   "description": "The cross-family adversarial SWE-review engine ship-change gates on (owned by agentic-engineering): audit_experiment --scaffold (design review of a PRODUCT/scaffold change PROPOSAL, architecture dimensions) and --code (review of a DIFF, implementation dimensions), each read by the OPPOSITE model family from the change's author. The experiment-audit modes (verify_claim / --design / --data / close) live in the research product's verify-claims (automated-researcher), not here.",
-  "version": "0.7.8",
+  "version": "0.7.9",
   "author": {
     "name": "Anton de la Fuente"
   }
