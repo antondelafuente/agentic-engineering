@@ -273,6 +273,19 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/aar-engineering/skills/ship-
   fi
 fi
 
+# 9. cloud-ship close-gate smoke (#18): the fail-closed record gate (Verdict PASS + branch-binding +
+#    reviewed-head equality) close-cloud-ship.sh enforces before the box opens/approves/merges — behavior
+#    the JSON/syntax checks can't cover. Runs when the close gate, the smoke, or the dispatch launcher changed.
+if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/aar-engineering/skills/cloud-ship/scripts/(close-cloud-ship|close_cloud_ship_smoke|dispatch-cloud-ship)\.sh$'; then
+  CS_SMOKE="$ROOT/plugins/aar-engineering/skills/cloud-ship/scripts/close_cloud_ship_smoke.sh"
+  if [ -f "$CS_SMOKE" ]; then
+    echo "[checks] cloud-ship close-gate smoke" >&2
+    bash "$CS_SMOKE" >&2 && ok "close_cloud_ship smoke" || err "cloud-ship close-gate smoke FAILED"
+  else
+    err "cloud-ship script changed but close_cloud_ship_smoke.sh missing — cannot verify the fail-closed close gate (#18)"
+  fi
+fi
+
 # 10. run-supervision-record smoke (#168): the monotonic state machine + fail-closed is-desired-active +
 #     atomic writes + the update-vs-stop/close race — behavior the JSON/syntax checks can't cover. Runs
 #     when the helper or its smoke changed.
