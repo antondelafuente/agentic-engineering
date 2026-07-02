@@ -61,7 +61,7 @@ echo "=== comment: attached -b does not consume the next positional issue number
 out=$(env "${ENGENV[@]}" bash "$WF" issue codex comment -bbody 8 -Rexample/repo 2>&1); rc=$?
 echo "$out"
 check "attached comment exits zero" "[ $rc -eq 0 ]"
-check "comment passed the positional issue number after attached -b" "grep -q 'TOKEN=codex-token ARGS=issue comment -bbody 8 -Rexample/repo' \"\$GH_FAKE_LOG\""
+check "comment passed attached -b and the following positional issue number unchanged" "grep -q 'TOKEN=codex-token ARGS=issue comment -bbody 8 -Rexample/repo' \"\$GH_FAKE_LOG\""
 
 echo "=== ambient override trail: attached -R is recognized as the target repo ==="
 : > "$GH_FAKE_LOG"
