@@ -85,6 +85,22 @@ gate_record() {
   exit 0
 }
 
+# ---- ready-only close-gate (mirror wf.sh's disposition set-equality; offline-testable) --------------------
+# The disposition vocabulary + the set-equality rule are wf.sh's (DISPO_RE at wf.sh; AGENTS.md "exactly one
+# disposition"). The DISPOSITION labels on the closing issue must be EXACTLY {ready} — a malformed issue that
+# also carries `blocked`/`parked`/etc. FAILS CLOSED (a substring 'contains ready' check would fail open on it).
+DISPO_RE='^(ready|needs-shaping|blocked|parked|other)$'
+# dispo_gate_check — reads newline-separated label names on STDIN. Prints the close-gate verdict + returns 0/2.
+dispo_gate_check() {
+  local dset
+  dset=$(grep -vE '^[[:space:]]*$' | grep -E "$DISPO_RE" | sort -u | paste -sd, -)
+  if [ "$dset" = ready ]; then
+    echo "CLOUD-SHIP-CLOSE-GATE: PASS"; return 0
+  fi
+  echo "CLOUD-SHIP-CLOSE-GATE: REFUSE disposition set is {${dset:-none}}, not exactly {ready} — triage the issue to a single 'ready' disposition first (WF_ALLOW_NONREADY_CLOSE=1 to override)"
+  return 2
+}
+
 # ---- engineer-token seams (mirror wf.sh; no new config) --------------------------------------------------
 family_suffix()   { case "$1" in claude) echo CLAUDE ;; codex) echo CODEX ;; *) die "unknown family '$1'" ;; esac; }
 opposite_family() { case "$1" in claude) echo codex ;; codex) echo claude ;; *) die "unknown family '$1'" ;; esac; }
@@ -152,17 +168,17 @@ do_close() {
   local reviewed_head
   reviewed_head=$(sed -nE 's/^Reviewed-Head:[[:space:]]*([0-9a-fA-F]+)[[:space:]]*$/\1/p' "$recfile" | head -1)
 
-  # 4. Replicate ship-change's close-gate (ready-only), BEFORE any PR/approve. `Closes #<issue>` is same-repo
-  #    by construction; a cross-repo close is impossible here, but we still assert the issue lives in <repo>.
+  # 4. Replicate ship-change's ready-only close-gate (disposition SET == exactly {ready}), BEFORE any
+  #    PR/approve. `Closes #<issue>` is same-repo by construction, so no cross-repo closing ref is possible.
   if [ "${WF_ALLOW_NONREADY_CLOSE:-}" = 1 ]; then
     note "WARN: close-gate OVERRIDDEN (WF_ALLOW_NONREADY_CLOSE=1) — not checking issue disposition"
   else
-    local labels
-    labels=$(gh issue view "$ISSUE" -R "$REPO" --json labels --jq '[.labels[].name] | join(" ")' 2>/dev/null) \
+    local labels_raw dg_out dg_rc
+    labels_raw=$(gh issue view "$ISSUE" -R "$REPO" --json labels --jq '.labels[].name' 2>/dev/null) \
       || die "could not read labels on ${REPO}#${ISSUE} to enforce the close-gate (failing closed; WF_ALLOW_NONREADY_CLOSE=1 to override)"
-    printf ' %s ' "$labels" | grep -q ' ready ' \
-      || die "close-gate: ${REPO}#${ISSUE} is not disposition 'ready' (labels: ${labels:-<none>}) — triage it to ready first (WF_ALLOW_NONREADY_CLOSE=1 to override)"
-    note "close-gate ok: ${REPO}#${ISSUE} is disposition=ready"
+    dg_out=$(printf '%s\n' "$labels_raw" | dispo_gate_check); dg_rc=$?
+    [ "$dg_rc" -eq 0 ] || die "${dg_out#CLOUD-SHIP-CLOSE-GATE: REFUSE } (on ${REPO}#${ISSUE})"
+    note "close-gate ok: ${REPO}#${ISSUE} disposition set == {ready}"
   fi
 
   # 5. Mint the AUTHORING bot token → open the PR (title = branch head commit subject; body links record + Closes).
@@ -202,8 +218,10 @@ do_close() {
 CMD=${1:-}; shift || true
 case "$CMD" in
   gate)  gate_record "${1:-}" "${2:-}" "${3:-}" ;;
+  dispo-gate) printf '%s\n' "$@" | dispo_gate_check; exit $? ;;   # offline: the ready-only close-gate over a label set
   close) do_close "$@" ;;
   *) echo "usage: close-cloud-ship.sh gate <record-file> <remote-head> <branch>" >&2
+     echo "       close-cloud-ship.sh dispo-gate <label>...   (ready-only close-gate over a label set)" >&2
      echo "       close-cloud-ship.sh close -R <owner/repo> -i <issue> -b <branch> [-a claude|codex]" >&2
      exit 1 ;;
 esac

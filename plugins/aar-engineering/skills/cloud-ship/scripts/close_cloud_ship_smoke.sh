@@ -104,5 +104,33 @@ printf '%s' "$out" | grep -q '^CLOUD-SHIP-GATE: PASS$' && echo "ok   pass-token"
 out=$(bash "$GATE" gate "$(rec "$(mkrecord "$BR" "$SHA40" FAIL)")" "$SHA40" "$BR" 2>&1)
 printf '%s' "$out" | grep -q '^CLOUD-SHIP-GATE: REFUSE ' && echo "ok   refuse-token" || { echo "FAIL refuse-token: '$out'"; fails=1; }
 
+# ---- the ready-only close-gate (disposition SET == exactly {ready}) --------------------------------------
+# The `close` path enforces this over the closing issue's labels; `dispo-gate` runs the pure check offline.
+expect_dg() { # expect_dg <PASS|REFUSE> <name> <label...>
+  local want=$1 name=$2; shift 2
+  local out rc got
+  out=$(bash "$GATE" dispo-gate "$@" 2>&1); rc=$?
+  got=PASS; [ "$rc" -ne 0 ] && got=REFUSE
+  if [ "$got" = "$want" ]; then echo "ok   $name"; else echo "FAIL $name: want $want got $got :: $out"; fails=1; fi
+}
+
+# 18. exactly {ready} -> PASS (even alongside non-disposition labels like `bug`/`enhancement`).
+expect_dg PASS dispo-ready-only ready
+expect_dg PASS dispo-ready-plus-nondisposition ready bug enhancement
+# 19. ready + another DISPOSITION (malformed multi-disposition) -> REFUSE (the fail-open the reviewer caught).
+expect_dg REFUSE dispo-ready-and-blocked ready blocked
+expect_dg REFUSE dispo-ready-and-parked ready parked
+# 20. a non-ready disposition -> REFUSE.
+expect_dg REFUSE dispo-needs-shaping needs-shaping
+expect_dg REFUSE dispo-blocked blocked
+# 21. no disposition label at all -> REFUSE.
+expect_dg REFUSE dispo-none bug
+expect_dg REFUSE dispo-empty ""
+# 22. duplicate `ready` labels collapse to the set {ready} -> PASS (set semantics, not a count).
+expect_dg PASS dispo-ready-dup ready ready
+# 23. the close-gate prints its own distinct token (not the record-gate token).
+out=$(bash "$GATE" dispo-gate ready blocked 2>&1)
+printf '%s' "$out" | grep -q '^CLOUD-SHIP-CLOSE-GATE: REFUSE ' && echo "ok   close-gate-token" || { echo "FAIL close-gate-token: '$out'"; fails=1; }
+
 if [ "$fails" -eq 0 ]; then echo "close_cloud_ship_smoke: ALL PASS"; else echo "close_cloud_ship_smoke: FAILURES"; fi
 exit "$fails"
