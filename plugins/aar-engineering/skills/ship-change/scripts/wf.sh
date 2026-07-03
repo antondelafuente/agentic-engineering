@@ -2482,7 +2482,14 @@ gc) # wf.sh gc [repo]  — sweep DEAD-END /tmp/wf-* worktrees + their local chan
     if [ -z "$GCBR" ] || [ "$GCBR" = HEAD ]; then
       note "gc: keep $GCWT — could not resolve a branch (detached or unreadable)"; kept=$((kept + 1)); continue
     fi
-    if [ -n "$(git -C "$GCWT" status --porcelain 2>/dev/null)" ]; then
+    # Capture the exit status explicitly (review F1): a FAILED `git status` must fail closed (keep), never
+    # read as "empty output -> clean" and fall through to a removal we never actually verified was safe.
+    if GCSTATUS=$(git -C "$GCWT" status --porcelain 2>/dev/null); then GCSTATUSRC=0; else GCSTATUSRC=$?; fi
+    if [ "$GCSTATUSRC" != 0 ]; then
+      note "gc: keep $GCWT (branch $GCBR) — could not inspect working-tree status (git status failed, rc=$GCSTATUSRC); failing closed"
+      kept=$((kept + 1)); continue
+    fi
+    if [ -n "$GCSTATUS" ]; then
       note "gc: keep $GCWT (branch $GCBR) — uncommitted/untracked changes"; kept=$((kept + 1)); continue
     fi
     GCERR=$(mktemp 2>/dev/null) || GCERR="${TMPDIR:-/tmp}/wf_gc_err_$$"

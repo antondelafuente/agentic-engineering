@@ -57,9 +57,13 @@ export GH_FAKE_PR_DIR="$TMP/prstate"
 mkdir -p "$GH_FAKE_PR_DIR"
 export GH_TOKEN=dummy-ambient-token   # satisfies need_ambient_gh without a real `gh auth status` call
 
-git config --global user.email test@example.com >/dev/null 2>&1 || true
-git config --global user.name "Test" >/dev/null 2>&1 || true
-git config --global init.defaultBranch main >/dev/null 2>&1 || true
+# Isolate git config into a throwaway file (matches identity_smoke.sh / locate_audit_smoke.sh) so this smoke
+# NEVER writes to the caller's real ~/.gitconfig (code-review F2).
+export HOME="$TMP/home"; mkdir -p "$HOME"
+export GIT_CONFIG_GLOBAL="$TMP/gitconfig"; : > "$GIT_CONFIG_GLOBAL"
+git config --global user.email test@example.com
+git config --global user.name "Test"
+git config --global init.defaultBranch main
 
 # setup_repo <name> -> echoes the MAIN CHECKOUT path (origin = a local bare repo, one commit on main).
 setup_repo(){
@@ -152,6 +156,18 @@ printf 'MERGED 110 %s\n' "$SHA10" > "$GH_FAKE_PR_DIR/change_10-otherrepo"
 # 11. a stray non-worktree directory matching wf-* (junk, no .git at all) -> skipped, not an error
 mkdir -p "$ROOT/wf-999-junk"
 
+# 12. `git status` itself FAILS (corrupt index) on an otherwise-eligible MERGED worktree -> keep, fail closed
+#     (review F1: a failed status must never read as "empty output -> clean"). worktree/branch resolution
+#     (used earlier in the loop) don't touch the index, so only the status check itself is affected.
+WT_STATUSFAIL=$(mk_worktree "$REPO_A" "$ROOT" 12 statusfail)
+commit_in "$WT_STATUSFAIL" work
+SHA12=$(git -C "$WT_STATUSFAIL" rev-parse HEAD)
+printf 'MERGED 112 %s\n' "$SHA12" > "$GH_FAKE_PR_DIR/change_12-statusfail"
+INDEX12=$(git -C "$WT_STATUSFAIL" rev-parse --git-path index)
+printf '\x00\x01garbage-not-an-index\xff' > "$INDEX12"
+git -C "$WT_STATUSFAIL" status --porcelain >/dev/null 2>&1 \
+  && { echo "  FAIL: smoke setup: corrupted index did not actually break 'git status' — case 12 would be a false positive" >&2; fail=1; }
+
 echo "=== run: wf.sh gc \$REPO_A ==="
 : > "$GH_FAKE_LOG"
 out=$(WF_WORKTREE_ROOT="$ROOT" bash "$WF" gc "$REPO_A" 2>&1); rc=$?
@@ -191,6 +207,10 @@ check "other repo's worktree: untouched (branch)"   "git -C \"$REPO_B\" show-ref
 
 check "stray non-worktree dir: left alone" "[ -d \"$ROOT/wf-999-junk\" ]"
 check "stray non-worktree dir: noted, not fatal" "grep -q 'not a git worktree' <<<\"\$out\""
+
+check "failed 'git status' (F1): worktree kept, not force-removed" "[ -d \"$WT_STATUSFAIL\" ]"
+check "failed 'git status' (F1): branch kept"                     "git -C \"$REPO_A\" show-ref --verify -q refs/heads/change/12-statusfail"
+check "failed 'git status' (F1): note explains the fail-closed reason" "grep -q 'could not inspect working-tree status' <<<\"\$out\""
 
 check "summary line reports 3 swept" "grep -Eq 'gc: swept 3, kept [0-9]+, skipped 1' <<<\"\$out\""
 
