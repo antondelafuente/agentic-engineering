@@ -293,6 +293,20 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/aar-engineering/skills/cloud
   fi
 fi
 
+# 9b. cloud-ship dispatch dupe-guard + branch-check smoke (#22): the fail-closed pre-launch duplicate guard
+#     (open-PR / in-flight-branch detection) and the cloud-ship/<issue>-<slug> branch naming validation
+#     dispatch-cloud-ship.sh enforces before ever filling the brief. Runs when the dispatch launcher or its
+#     smoke changed.
+if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/aar-engineering/skills/cloud-ship/scripts/(dispatch-cloud-ship|dispatch_cloud_ship_smoke)\.sh$'; then
+  DCS_SMOKE="$ROOT/plugins/aar-engineering/skills/cloud-ship/scripts/dispatch_cloud_ship_smoke.sh"
+  if [ -f "$DCS_SMOKE" ]; then
+    echo "[checks] cloud-ship dispatch dupe-guard smoke" >&2
+    bash "$DCS_SMOKE" >&2 && ok "dispatch_cloud_ship smoke" || err "cloud-ship dispatch dupe-guard smoke FAILED"
+  else
+    err "dispatch-cloud-ship.sh changed but dispatch_cloud_ship_smoke.sh missing — cannot verify the fail-closed dupe guard (#22)"
+  fi
+fi
+
 # 10. disposition-injection smoke (#15): the retained #137/#139 disposition-aware prompt injection in
 #     audit_experiment.sh is only exercised by real ship-change reviews with prior findings. This dry-run
 #     smoke asserts the framing is injected when DISPOSITION_FILE is set, absent when unset, and still carries

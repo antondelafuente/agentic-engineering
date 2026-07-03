@@ -20,8 +20,10 @@
 #       - branch-equality = the anti-record-replay guard (a PASS record can't authorize a different branch).
 #
 #   close-cloud-ship.sh close -R <owner/repo> -i <issue> -b <branch> [-a <claude|codex>]
-#       Full close. Reads the latest "CLOUD-SHIP RUN" issue comment (ambient READ-ONLY gh), reads the live
-#       branch head via `git ls-remote`, runs the gate, replicates ship-change's ready-only close-gate, then
+#       Full close. First refuses if the issue is already CLOSED (a duplicate-merge guard — #22's incident was
+#       an on-box PR closing the issue while a completed cloud-ship run for it still had a live PASS record).
+#       Then reads the latest "CLOUD-SHIP RUN" issue comment (ambient READ-ONLY gh), reads the live branch head
+#       via `git ls-remote`, runs the gate, replicates ship-change's ready-only close-gate, then
 #       opens/approves/merges with the engineer bots. -a = authoring family (default claude, the cloud author).
 #
 # Engineer identity: consumes the SAME seams wf.sh uses — WF_ENGINEER_TOKEN_CMD_CLAUDE / _CODEX (with legacy
@@ -143,6 +145,15 @@ do_close() {
   command -v gh  >/dev/null 2>&1 || die "gh not on PATH"
   command -v git >/dev/null 2>&1 || die "git not on PATH"
   local REVIEWER; REVIEWER=$(opposite_family "$AUTHOR")
+
+  # 0. Duplicate-merge guard (#22 hardening round, code-review Finding 1): refuse if the issue this record
+  #    would close is already CLOSED. The #22 incident was exactly this — an on-box PR merged (and closed the
+  #    issue) while a completed cloud-ship run for the SAME issue still had a live PASS record; nothing at
+  #    close time checked the issue's own state before opening/approving/merging a now-redundant PR.
+  local issue_state
+  issue_state=$(gh issue view "$ISSUE" -R "$REPO" --json state --jq .state 2>/dev/null) \
+    || die "could not read state of ${REPO}#${ISSUE} (ambient gh read failed; failing closed)"
+  [ "$issue_state" = OPEN ] || die "issue ${REPO}#${ISSUE} is already ${issue_state:-<unknown>} — refusing to close a duplicate cloud-ship run (the issue was likely already resolved by another PR)"
 
   # 1. Read the LATEST "CLOUD-SHIP RUN" issue comment (ambient READ-ONLY gh — inspection only).
   note "reading the latest CLOUD-SHIP RUN record on ${REPO}#${ISSUE}…"
