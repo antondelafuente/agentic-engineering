@@ -110,14 +110,19 @@ bc_out=$(validate_branch "$ISSUE" "$BRANCH"); bc_rc=$?
 [ -f "$TMPL" ] || die "brief template missing at $TMPL"
 
 # Dupe guard (#22) — refuse before doing any work if the issue already has an open PR or an in-flight branch.
+# FAIL CLOSED on a lookup failure too (code-review Finding 1): a `gh`/`git` error must never read as "no
+# duplicate" — that would silently defeat the whole guard on a transient network blip. Only an EMPTY, WELL-
+# FORMED result counts as "no hits"; any query/parse failure dies (pass --force to bypass the guard entirely).
 if [ "$FORCE" = 1 ]; then
   note "WARN: dupe guard OVERRIDDEN (--force) — not checking for an existing PR/branch on #${ISSUE}"
 else
   note "dupe guard: checking ${REPO} for an existing open PR or in-flight branch on #${ISSUE}…"
-  prs=""
-  if command -v gh >/dev/null 2>&1; then
-    prs=$(gh pr list -R "$REPO" --state open --json number,url,title,body 2>/dev/null \
-            | ISSUE="$ISSUE" python3 -c '
+  command -v gh >/dev/null 2>&1 \
+    || die "dupe guard: gh not on PATH — cannot confirm no duplicate open PR exists for #${ISSUE} (failing closed; pass --force to override, or install gh)"
+  pr_json=$(gh pr list -R "$REPO" --state open --json number,url,title,body 2>&1)
+  [ $? -eq 0 ] \
+    || die "dupe guard: 'gh pr list' failed for ${REPO} — cannot confirm no duplicate PR exists for #${ISSUE} (failing closed; pass --force to override): $pr_json"
+  prs=$(printf '%s' "$pr_json" | ISSUE="$ISSUE" python3 -c '
 import json, os, re, sys
 issue = os.environ["ISSUE"]
 pat = re.compile(r"(?<!\d)#" + re.escape(issue) + r"(?!\d)")
@@ -125,12 +130,13 @@ for pr in json.load(sys.stdin):
     text = (pr.get("title") or "") + "\n" + (pr.get("body") or "")
     if pat.search(text):
         print(pr["url"])
-' 2>/dev/null) || prs=""
-  else
-    note "WARN: gh not on PATH — skipping the open-PR check (branch check still runs)"
-  fi
-  branches=$(git ls-remote --heads "https://github.com/${REPO}.git" 2>/dev/null \
-               | awk '{print $2}' | sed -E 's#^refs/heads/##' \
+')
+  [ $? -eq 0 ] \
+    || die "dupe guard: could not parse 'gh pr list' output for ${REPO} — cannot confirm no duplicate PR exists for #${ISSUE} (failing closed; pass --force to override)"
+  branches_raw=$(git ls-remote --heads "https://github.com/${REPO}.git" 2>&1)
+  [ $? -eq 0 ] \
+    || die "dupe guard: 'git ls-remote' failed for ${REPO} — cannot confirm no in-flight branch exists for #${ISSUE} (failing closed; pass --force to override): $branches_raw"
+  branches=$(printf '%s\n' "$branches_raw" | awk '{print $2}' | sed -E 's#^refs/heads/##' \
                | grep -E "^(change|cloud-ship)/${ISSUE}-" || true)
   dg_out=$(dupe_gate "$ISSUE" "$prs" "$branches"); dg_rc=$?
   note "$dg_out"
