@@ -57,7 +57,9 @@ Fills `scripts/cloud-ship-brief.tmpl` (literal substitution of `@@REPO@@`/`@@ISS
   `claude --remote` session lands on the account/server default (currently Opus 4.8). Deployment policy is that
   gated execution legs run **Sonnet-tier** — the cross-family review + the fail-closed close gate are what
   protect quality here, not which model authors the change. Verified 2026-07-02 by transcript ground truth:
-  `--model <id>` does pin the VM session model.
+  `--model <id>` does pin the VM session model. (Same model-tier rationale, stated as a fuller
+  dispatcher-vs-implementor contract — model tier, watch cadence, lifecycle/reap — for the on-box path:
+  `ship-change` SKILL.md, "Who runs this skill — the dispatcher contract".)
 - **Dupe guard (`-i <issue>`, fail-closed, `--force` to override):** before doing any work, refuses to dispatch
   if the target issue already has an **open PR** referencing it, or an **in-flight branch** (`change/<issue>-*`
   or `cloud-ship/<issue>-*`) already exists on origin. This closes a real incident (#22): an agent ran both an

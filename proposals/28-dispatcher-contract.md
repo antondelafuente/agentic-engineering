@@ -38,7 +38,9 @@ to a stop record, not supervised turn-by-turn), so it already covers model tier 
 (the box-side close gate), but the cross-reference makes the shared model-tier rationale traceable to one
 place instead of two independent statements drifting apart.
 
-Bump the plugin version (patch) and add a CHANGELOG entry per repo convention.
+Bump the plugin version (patch, `aar-engineering`'s `plugin.json`) per repo convention — required by
+`.aar-ci/checks.sh` §5 whenever a non-manifest plugin file changes. The repo keeps no separate `CHANGELOG`
+file; this proposal doc is the ADR/change record.
 
 ## Alternatives considered
 
@@ -57,7 +59,7 @@ Bump the plugin version (patch) and add a CHANGELOG entry per repo convention.
 
 ## Blast radius
 
-Docs-only: two `SKILL.md` files (`ship-change`, `cloud-ship`) plus the plugin `CHANGELOG.md`/version bump.
+Docs-only: two `SKILL.md` files (`ship-change`, `cloud-ship`) plus the plugin `plugin.json` version bump.
 No script, workflow, or CI-check behavior changes. Read by any agent (Claude or Codex) that loads either
 skill fresh; no runtime code path depends on this text.
 
