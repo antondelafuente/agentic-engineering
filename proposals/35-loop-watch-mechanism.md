@@ -65,7 +65,7 @@ checks.sh` requires for any non-manifest change under a plugin dir. No `wf.sh` l
 behavior smoke still applies as the standard plugin/skill-change gate. Affects how future dispatcher
 sessions on this box (and any other Claude Code deployment of this plugin) are instructed to implement the
 watch duty. The instance guidance at `/home/anton/AGENTS.md` already carries a forward reference to this
-issue (`agentic-engineering#35`) naming `/loop` as the Claude-substrate watch mechanism — that's a separate
+issue (`antondelafuente/agentic-engineering#35`) naming `/loop` as the Claude-substrate watch mechanism — that's a separate
 repo, out of scope for this PR, and needs no further edit once this lands.
 
 ## Rollout + rollback
