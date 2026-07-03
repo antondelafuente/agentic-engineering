@@ -25,12 +25,14 @@ Two one-line touches, both defense-in-depth around the existing close-gate:
 
 2. **`AGENTS.md` dispositions section (canonical; synced to
    `plugins/aar-engineering/skills/ship-change/references/DISPOSITIONS.md`, drift-checked by
-   `.aar-ci/checks.sh`) — a contract line.** `needs-shaping → ready` is the **researcher's** transition: an
-   agent records the flip only on the back of an actual researcher conversation, and the flip must **cite it**
-   — a comment on the issue summarizing/linking the shaping discussion. An agent asked to *implement* an issue
-   never flips its disposition label as a step of implementing it. This closes the loophole for every lane
-   (not just ship-change) and makes the flip auditable, mirroring the intended pattern already exercised on
-   `automated-researcher#311` / `#313`.
+   `.aar-ci/checks.sh`) — a contract line.** `needs-shaping → ready` is the **researcher's** transition, in
+   every lane: an agent records the flip only on the back of an actual researcher conversation, and the flip
+   must **cite it** — a comment on the issue summarizing/linking the shaping discussion. An agent asked to
+   *implement* an issue never flips its disposition label as a step of implementing it. This states the norm
+   for every lane and makes the flip auditable, mirroring the intended pattern already exercised on
+   `automated-researcher#311` / `#313`. It does **not**, by itself, add a new mechanical gate to any lane other
+   than the ship-change pre-flight above — `cloud-ship`'s close-time `ready` check (its existing mechanical
+   backstop) is unchanged by this PR; a matching early pre-flight there is out of scope here (see Alternatives).
 
 Both blocks are kept byte-identical between `AGENTS.md` and the packaged `DISPOSITIONS.md` reference, per the
 existing sync contract enforced by `.aar-ci/checks.sh`'s disposition-reference-drift check.
@@ -44,10 +46,16 @@ existing sync contract enforced by `.aar-ci/checks.sh`'s disposition-reference-d
   caught at `finish`, after the worktree/design-doc/review work is already sunk — the whole point of #315 is to
   move the check earlier.
 - **Enforce the pre-flight mechanically in `wf.sh start`** (reject the `start` call itself if the issue isn't
-  `ready`). Deferred: `wf.sh start` doesn't currently look up issue labels, and adding that lookup + failure
-  mode is a larger, separable change from the two one-line documentation touches #315 scoped. The close-gate at
-  `finish` already provides the mechanical backstop; this proposal adds the earlier *instructional* check the
-  issue asked for. A follow-up could harden `start` itself if agents keep skipping the documented pre-flight.
+  `ready`). Deferred: `wf.sh start` doesn't currently look up issue labels, and adding that lookup + a failure
+  mode (missing label vs. wrong disposition vs. lookup/permission failure — the existing `finish`-gate override
+  precedent, `WF_ALLOW_NONREADY_CLOSE=1`, suggests any mechanical gate needs its own escape hatch too) is a
+  larger, separable change from the two one-line documentation touches #315 scoped, and from what this PR's
+  mirror issue (#30, ready as filed) asked for. The close-gate at `finish` already provides the mechanical
+  backstop today — a PR closing a non-`ready` issue fails closed regardless of what an agent did in between —
+  so this proposal's pre-flight is a genuine cost-saving instructional check (catch it before work is spent),
+  not the only thing standing between an agent and a bad merge. A follow-up could harden `start` itself
+  mechanically (and extend the same treatment to `cloud-ship`'s dispatch entry point) if agents keep skipping
+  the documented pre-flight in practice.
 
 ## Blast radius
 

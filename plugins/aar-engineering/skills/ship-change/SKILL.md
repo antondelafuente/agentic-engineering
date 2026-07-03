@@ -110,6 +110,18 @@ workflow if unsure. `wf.sh` is `scripts/wf.sh` in this skill.
 #    `gh` passthrough — the #91 model): `wf.sh issue <fam> comment|close|label|dispose`. `dispose <N> --label
 #    <disp> --body-line "blocked-by: #M"` atomically sets one disposition label + an idempotent body line (the
 #    `blocked` path). These exist so the #149 gh write-guard never strands triage-feedback's closes/labels.
+#
+#    PRE-FLIGHT — before creating the worktree (step 1), read <N>'s disposition. Not `ready` — including
+#    unlabeled/untriaged — STOP: do not implement. Route instead:
+#      needs-shaping → go shape it with the researcher; the flip to `ready` is the RESEARCHER'S transition,
+#                       not yours (see AGENTS.md "Issue tracker — dispositions") — you don't triage your own
+#                       way in by relabeling it and proceeding.
+#      blocked       → surface the blocker (don't work around it).
+#      parked        → leave it.
+#    Implementation starts only from `ready`. This is a judgment step you apply before running `wf.sh start`
+#    (below), not a `wf.sh` argument or flag — the mechanical backstop is the close-gate `finish` already
+#    enforces (see "The close-gate", below); this pre-flight exists so a non-`ready` issue is caught before
+#    any worktree/design-doc/review work is spent on it, not after.
 
 # 1. START — worktree + branch + design-doc skeleton
 wf.sh start <N> <slug>            # prints WORKTREE=… BRANCH=… DOC=proposals/<N>-<slug>.md
