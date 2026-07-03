@@ -10,8 +10,10 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`ready`** — actionable now; any design is settled and lives in the implementing PR itself (design-in-PR).
   Implement + merge on the cross-family review + checks. `ready` is the only disposition **eligible**
   for auto-handling — but eligibility is not blind auto-merge: the auto-handler still runs the full
-  cross-family review + checks, and the precise boundary of which `ready` Issues it acts on autonomously
-  (especially by blast radius) is #49's to define.
+  cross-family review + checks. No Issue is auto-implemented without an explicit dispatch (a human or a
+  dispatcher session naming it); the precise boundary of which `ready` Issues get acted on with less
+  oversight (especially by blast radius) is undecided, and will be revisited if/when a standing
+  auto-handler is actually proposed.
 - **`needs-shaping`** — a direction, too vague to start; needs scoping into `ready` first, through a
   conversation with the researcher (which may produce a few `ready` tickets).
 - **`blocked`** — decided but gated on a prerequisite; carries a `blocked-by: #N` body line. (When the
