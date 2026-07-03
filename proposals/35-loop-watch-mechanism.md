@@ -23,25 +23,29 @@ recurring, judged LOOK at the implementor's pane — not a timer and not an exit
 
 ## Approach
 
-Name the **`/loop` skill** (Claude Code's recurring-prompt skill) specifically as the watch mechanism for
-Claude-family dispatchers: `/loop 5m` armed with a prompt that has the dispatcher inspect the implementor's
-pane and act on what it sees (nudge if wedged-idle; reap once the PR has merged). The mechanism matters
-because each `/loop` firing **re-invokes the dispatcher agent itself** — every cycle gets a real judgment
-call on the pane contents, not just a liveness bit. It's also visible/cancellable harness machinery (shows
-up in `/loop` state, stoppable like any other skill invocation) rather than an opaque background process
-the harness can kill without anyone noticing.
+State the contract itself as a capability requirement, not a model-family label: the dispatcher needs **a
+mechanism that re-invokes its own judgment on a short cadence** — a background timer or exit-only monitor
+doesn't satisfy this even running continuously, because neither puts a judged look at the pane on every
+cycle. Then name the concrete instantiation on the harness this box actually runs: on Claude Code, that
+mechanism is the **`/loop` skill** — `/loop 5m` armed with a pane-inspection prompt that has the dispatcher
+inspect the implementor's pane and act on what it sees (nudge if wedged-idle; reap once the PR has merged).
+The mechanism matters because each `/loop` firing **re-invokes the dispatcher agent itself** — every cycle
+gets a real judgment call on the pane contents, not just a liveness bit. It's also visible/cancellable
+harness machinery (shows up in `/loop` state, stoppable like any other skill invocation) rather than an
+opaque background process the harness can kill without anyone noticing.
 
 Concretely, step 2 of the dispatcher contract will:
-- Name `/loop 5m` as the watch mechanism, with a pane-inspection prompt as the loop body (look at the
-  implementor's pane; nudge if wedged-idle; reap once merged).
+- Frame the requirement as periodic re-invocation of the dispatcher's own judgment (the varying unit is
+  harness capability, not model family), then name `/loop 5m` with a pane-inspection prompt as the concrete
+  instantiation for Claude Code dispatchers (look at the implementor's pane; nudge if wedged-idle; reap once
+  merged).
 - State plainly that ad-hoc background sleep-loops and exit-only monitors do not satisfy the contract —
   they fail the "judged look every cycle" requirement even if they happen to run continuously.
 - Keep the existing caveat that the watch is session-local (the loop dies with the dispatcher's own
   session) and must be re-armed after any dispatcher restart/handoff — `/loop` doesn't change that
   property, it just names what should be re-armed.
-- Note that non-Claude dispatchers use their harness's equivalent periodic-reinvocation mechanism — the
-  contract is "a mechanism that re-invokes the dispatcher's judgment on a short cadence," and `/loop` is
-  the Claude-substrate instance of that, not the only valid one.
+- Note that dispatchers on a different harness use that harness's equivalent periodic-reinvocation
+  mechanism — `/loop` is the Claude Code instantiation of the contract, not the only valid one.
 
 ## Alternatives considered
 
@@ -55,11 +59,17 @@ Concretely, step 2 of the dispatcher contract will:
 
 ## Blast radius
 
-Docs-only: `plugins/aar-engineering/skills/ship-change/SKILL.md`, dispatcher-contract section (step 2).
-No code, no `wf.sh` changes, no CI impact. Affects how future dispatcher sessions on this box (and any
-other Claude-substrate deployment of this plugin) are instructed to implement the watch duty.
+`plugins/aar-engineering/skills/ship-change/SKILL.md` (dispatcher-contract section, step 2) plus the
+matching `plugins/aar-engineering/.claude-plugin/plugin.json` patch version bump the repo's `.aar-ci/
+checks.sh` requires for any non-manifest change under a plugin dir. No `wf.sh` logic change; the fake-HOME
+behavior smoke still applies as the standard plugin/skill-change gate. Affects how future dispatcher
+sessions on this box (and any other Claude Code deployment of this plugin) are instructed to implement the
+watch duty. The instance guidance at `/home/anton/AGENTS.md` already carries a forward reference to this
+issue (`agentic-engineering#35`) naming `/loop` as the Claude-substrate watch mechanism — that's a separate
+repo, out of scope for this PR, and needs no further edit once this lands.
 
 ## Rollout + rollback
 
-Doc change only; takes effect for the next dispatcher session that reads the contract. No staged rollout
-needed. Rollback is a plain revert of the SKILL.md hunk if the wording proves unclear in practice.
+Doc + manifest-version change only; takes effect for the next dispatcher session that reads the contract.
+No staged rollout needed. Rollback is a plain revert of the SKILL.md + plugin.json hunks if the wording
+proves unclear in practice.
