@@ -157,6 +157,13 @@ wf.sh finish <WORKTREE> <author>
 worktree, commit, and re-run `finish`. Never merge around the driver — the re-review-on-the-final-diff is
 the point.
 
+**A run that never reaches `finish`** (blocked at a gate, superseded, withdrawn, the implementing session
+died) leaves its worktree + local `change/*` branch behind — nothing sweeps them automatically. Run `wf.sh gc
+[repo]` any time to clean up: it removes only worktrees whose PR is closed/merged (with local HEAD proven to
+match what was actually reviewed) or whose branch has no PR and is fully merged into main; anything else —
+an open PR, unpushed/unmerged work, a dirty worktree, an unresolvable PR lookup — is left untouched
+(fail-closed). Safe to run unconditionally when abandoning/closing a run.
+
 ## The close-gate (enforced in `finish`)
 
 `finish` enforces the **close contract** on the issues a PR closes (before the merge approval):

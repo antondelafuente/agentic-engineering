@@ -66,6 +66,7 @@ Lifecycle (the agent does the judgment steps BETWEEN these):
   wf.sh comment <worktree> <author> [file] post an AUTHOR triage comment as the engineer identity (body: file|stdin)
   wf.sh issue   <author> <gh issue args…>  file/comment a GitHub Issue AS the engineer identity (no worktree)
   wf.sh finish <worktree> <author>        checks + fail-closed --code gate + ready + merge + cleanup
+  wf.sh gc [repo]                         sweep abandoned /tmp/wf-* worktrees + local change/* branches (safe any time)
   wf.sh doctor <author> [repo-or-worktree] report ambient + engineer identity readiness without printing tokens
   wf.sh doctor <author> [repo-or-worktree] --readonly  STRICT read-only-ambient detector: exits non-zero if the ambient credential is not authoritatively read-only (API + git-push, per-source, non-mutating)
   wf.sh locate-audit [repo]               print the verify-claims reviewer that would run (introspection/test)
@@ -1008,6 +1009,25 @@ issue_maintainer_verb(){
 }
 
 main_checkout(){ git -C "$1" worktree list --porcelain | awk '/^worktree /{print $2; exit}'; }   # 1st worktree = main
+# delete_local_workflow_branch <main-checkout> <branch> — best-effort local branch cleanup shared by `finish`
+# (post-merge) and `gc` (post-sweep): only ever touches a `change/*` workflow branch, never a branch still
+# checked out in another worktree. Never fatal — a cleanup failure must not turn an otherwise-done operation
+# (a merge, a gc removal) into a failure.
+delete_local_workflow_branch(){  # delete_local_workflow_branch <main_co> <br>
+  local main_co=$1 br=$2
+  case "$br" in
+    change/*) ;;
+    *) note "WARN: not deleting local non-workflow branch $br"; return 0 ;;
+  esac
+  git -C "$main_co" show-ref --verify --quiet "refs/heads/$br" || return 0   # already gone
+  if git -C "$main_co" worktree list --porcelain | grep -Fxq "branch refs/heads/$br"; then
+    note "WARN: local workflow branch $br is still checked out in a worktree; leaving it in place"
+  elif git -C "$main_co" branch -D "$br" >/dev/null 2>&1; then
+    note "deleted local workflow branch $br"
+  else
+    note "WARN: could not delete local workflow branch $br; remove it manually if stale"
+  fi
+}
 wt_pr(){
   local tok=${2:-}
   if [ -n "$tok" ]; then
@@ -2415,19 +2435,7 @@ finish) # wf.sh finish <worktree> <author>   — checks + fail-closed --code mer
   #    has to happen after the worktree is removed. Best-effort only: a cleanup failure must not turn an
   #    already-merged PR into a failed run.
   git -C "$MAIN_CO" worktree remove --force "$WT" 2>/dev/null || true
-  if [[ "$BR" == change/* ]]; then
-    if git -C "$MAIN_CO" show-ref --verify --quiet "refs/heads/$BR"; then
-      if git -C "$MAIN_CO" worktree list --porcelain | grep -Fxq "branch refs/heads/$BR"; then
-        note "WARN: local workflow branch $BR is still checked out in a worktree; leaving it in place"
-      elif git -C "$MAIN_CO" branch -D "$BR" >/dev/null 2>&1; then
-        note "deleted local workflow branch $BR"
-      else
-        note "WARN: could not delete local workflow branch $BR; remove it manually if stale"
-      fi
-    fi
-  else
-    note "WARN: not deleting local non-workflow branch $BR"
-  fi
+  delete_local_workflow_branch "$MAIN_CO" "$BR"
   git -C "$MAIN_CO" pull --ff-only -q origin main 2>/dev/null || note "WARN: could not ff-only pull main ($MAIN_CO) — reconcile manually"
   local_manifest=0; for p in "${PATHS[@]}"; do case "$p" in */plugin.json|*marketplace.json) local_manifest=1;; esac; done
   if [ "$local_manifest" = 1 ]; then
@@ -2435,6 +2443,90 @@ finish) # wf.sh finish <worktree> <author>   — checks + fail-closed --code mer
     note "a plugin manifest changed — refresh installs: claude plugin marketplace update $mp_name && claude plugin update <name>@$mp_name"
   fi
   echo "SHIPPED: PR #$PR merged (opposite-family review gate + checks). Worktree cleaned."
+  ;;
+
+gc) # wf.sh gc [repo]  — sweep DEAD-END /tmp/wf-* worktrees + their local change/* branches (#32).
+    # `finish` only cleans up on a successful merge; a run that never reaches finish (blocked at a gate,
+    # superseded, withdrawn, dead session) leaks its worktree + branch forever otherwise. `gc` finds them.
+    # For each ${WF_WORKTREE_ROOT:-/tmp}/wf-* worktree that belongs to <repo> (default: ORIGIN_REPO):
+    #   - a DIRTY worktree (uncommitted/untracked changes) is NEVER touched, regardless of PR state.
+    #   - PR OPEN, or a PR lookup that fails for any reason OTHER than "no PR exists" -> NEVER touch (fail closed).
+    #   - PR MERGED or CLOSED -> remove ONLY if local HEAD == the PR's headRefOid (design-review F1: a
+    #     squash-merge's landed commit is NOT an ancestor of the branch, so "PR merged" alone doesn't prove
+    #     these exact local commits are represented anywhere — headRefOid is GitHub's durable record of the
+    #     last SHA it saw for this PR, which survives the branch/worktree being gone). Local commits added
+    #     AFTER that SHA (never pushed, never reviewed) are unrepresented work -> NEVER touch.
+    #   - no PR at all -> remove ONLY if the branch is fully merged into main (git merge-base --is-ancestor);
+    #     otherwise it's unpushed/unmerged work with no PR protecting it -> NEVER touch.
+    # Safe to run any time, repeatedly; a clean run is a silent no-op. Read-only ambient gh is sufficient — gc
+    # never writes to GitHub, so it needs no engineer identity.
+  need_gh; need_ambient_gh
+  GCTARGET=${1:-$ORIGIN_REPO}
+  MAIN_CO=$(git -C "$GCTARGET" rev-parse --show-toplevel 2>/dev/null) || die "gc: not a git repo: $GCTARGET"
+  MAIN_CANON=$(canon_path "$MAIN_CO"); [ -n "$MAIN_CANON" ] || MAIN_CANON=$MAIN_CO
+  ROOT=${WF_WORKTREE_ROOT:-/tmp}
+  REPO=$(gh_repo "$MAIN_CO") || die "gc: could not resolve the GitHub repo from $MAIN_CO's origin remote"
+  BASE=$(git -C "$MAIN_CO" rev-parse --verify -q origin/main 2>/dev/null) || true
+  [ -n "$BASE" ] || BASE=$(git -C "$MAIN_CO" rev-parse --verify -q main 2>/dev/null) || true
+  [ -n "$BASE" ] || die "gc: could not resolve a main ref (origin/main or main) in $MAIN_CO"
+  swept=0; kept=0; skipped=0
+  for GCWT in "$ROOT"/wf-*; do
+    [ -d "$GCWT" ] || continue   # literal no-match glob, or a non-dir entry
+    GCWT_MAIN=$(main_checkout "$GCWT" 2>/dev/null) || GCWT_MAIN=""
+    if [ -z "$GCWT_MAIN" ]; then
+      note "gc: skip $GCWT (not a git worktree)"; skipped=$((skipped + 1)); continue
+    fi
+    GCWT_MAIN_CANON=$(canon_path "$GCWT_MAIN"); [ -n "$GCWT_MAIN_CANON" ] || GCWT_MAIN_CANON=$GCWT_MAIN
+    [ "$GCWT_MAIN_CANON" = "$MAIN_CANON" ] || continue   # some OTHER repo's worktree in the shared root — not ours
+    GCBR=$(wt_branch "$GCWT" 2>/dev/null) || GCBR=""
+    if [ -z "$GCBR" ] || [ "$GCBR" = HEAD ]; then
+      note "gc: keep $GCWT — could not resolve a branch (detached or unreadable)"; kept=$((kept + 1)); continue
+    fi
+    if [ -n "$(git -C "$GCWT" status --porcelain 2>/dev/null)" ]; then
+      note "gc: keep $GCWT (branch $GCBR) — uncommitted/untracked changes"; kept=$((kept + 1)); continue
+    fi
+    GCERR=$(mktemp 2>/dev/null) || GCERR="${TMPDIR:-/tmp}/wf_gc_err_$$"
+    if GCJSON=$(real_gh -R "$REPO" pr view "$GCBR" --json number,state,headRefOid 2>"$GCERR"); then GCPRRC=0; else GCPRRC=$?; fi
+    GCERRMSG=$(cat "$GCERR" 2>/dev/null); rm -f "$GCERR" 2>/dev/null || true
+    GCELIGIBLE=0; GCPRNUM=""; GCPRSTATE=""
+    if [ "$GCPRRC" = 0 ]; then
+      GCPRNUM=$(printf '%s' "$GCJSON" | jq -r '.number // empty' 2>/dev/null)
+      GCPRSTATE=$(printf '%s' "$GCJSON" | jq -r '.state // empty' 2>/dev/null)
+      GCHEADOID=$(printf '%s' "$GCJSON" | jq -r '.headRefOid // empty' 2>/dev/null)
+      case "$GCPRSTATE" in
+        MERGED|CLOSED)
+          GCLOCALSHA=$(git -C "$GCWT" rev-parse HEAD 2>/dev/null)
+          if [ -n "$GCHEADOID" ] && [ -n "$GCLOCALSHA" ] && [ "$GCLOCALSHA" = "$GCHEADOID" ]; then
+            GCELIGIBLE=1
+          else
+            note "gc: keep $GCWT (branch $GCBR) — PR #$GCPRNUM is $GCPRSTATE but local HEAD ($GCLOCALSHA) != the PR's last known head ($GCHEADOID); local commits beyond the PR are unrepresented"
+            kept=$((kept + 1)); continue
+          fi ;;
+        OPEN) note "gc: keep $GCWT (branch $GCBR) — PR #$GCPRNUM is open"; kept=$((kept + 1)); continue ;;
+        *) note "gc: keep $GCWT (branch $GCBR) — unrecognized PR state '$GCPRSTATE'; failing closed"
+           kept=$((kept + 1)); continue ;;
+      esac
+    elif printf '%s' "$GCERRMSG" | grep -qi 'no pull requests found'; then
+      if git -C "$MAIN_CO" merge-base --is-ancestor "$GCBR" "$BASE" 2>/dev/null; then
+        GCELIGIBLE=1
+      else
+        note "gc: keep $GCWT (branch $GCBR) — no PR and the branch has unmerged/unpushed commits"
+        kept=$((kept + 1)); continue
+      fi
+    else
+      note "gc: keep $GCWT (branch $GCBR) — PR lookup failed (rc=$GCPRRC): ${GCERRMSG:-no detail}; failing closed"
+      kept=$((kept + 1)); continue
+    fi
+    [ "$GCELIGIBLE" = 1 ] || { kept=$((kept + 1)); continue; }
+    if git -C "$MAIN_CO" worktree remove --force "$GCWT" 2>/dev/null; then
+      delete_local_workflow_branch "$MAIN_CO" "$GCBR"
+      note "gc: swept $GCWT (branch $GCBR, PR ${GCPRNUM:-none} ${GCPRSTATE:-NONE})"
+      swept=$((swept + 1))
+    else
+      note "gc: WARN could not remove worktree $GCWT; leaving it"; kept=$((kept + 1))
+    fi
+  done
+  note "gc: swept $swept, kept $kept, skipped $skipped (root=$ROOT repo=$REPO)"
   ;;
 
 *) echo "BLOCKED: unknown subcommand '${CMD:-}'." >&2; echo >&2; usage >&2; exit 1 ;;

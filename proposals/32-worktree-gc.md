@@ -27,14 +27,22 @@ For each directory matching `${WF_WORKTREE_ROOT:-/tmp}/wf-*`:
    is never gc'd regardless of PR state. This is stricter than the issue's minimum bar but matches
    `require_clean`'s existing philosophy (`finish` already refuses to merge dirty content) and the
    "must NEVER remove … work" directive.
-3. **Look up the branch's PR** via `gh pr view <branch> --json number,state` (ambient read-only auth is
-   sufficient — `gh pr view` resolves OPEN/CLOSED/MERGED alike, confirmed against this repo's own merged/closed
-   PRs during design). Three outcomes:
-   - **PR found, `MERGED` or `CLOSED`** → eligible for removal.
+3. **Look up the branch's PR** via `gh pr view <branch> --json number,state,headRefOid` (ambient read-only
+   auth is sufficient — `gh pr view` resolves OPEN/CLOSED/MERGED alike, confirmed against this repo's own
+   merged/closed PRs during design). Four outcomes:
+   - **PR found, `MERGED` or `CLOSED`, local HEAD == the PR's `headRefOid`** → eligible for removal. The
+     `headRefOid` check is load-bearing, not cosmetic (design-review F1): a squash-merge lands as a *new*
+     commit on main, so the branch's own commits are never ancestors of main — "PR is merged" alone does not
+     prove *these exact local commits* are represented anywhere. `headRefOid` is GitHub's durable record of
+     the last SHA it saw for the PR (confirmed to survive branch + worktree deletion, tested against this
+     repo's own already-cleaned-up merged/closed PRs) — comparing it to local HEAD catches commits added
+     *after* the PR's last push that were never reviewed or landed.
+   - **PR found, `MERGED`/`CLOSED`, local HEAD != `headRefOid`** → never touch (unrepresented local commits).
    - **PR found, `OPEN`** → never touch.
    - **No PR found** (gh's `no pull requests found for branch "…"` message specifically) → eligible only if
      the branch is fully merged into main (`git merge-base --is-ancestor <branch> <base>`, base = origin/main
-     falling back to local main, mirroring `base_ref`). Otherwise it's unpushed/unmerged work with no PR
+     falling back to local main, mirroring `base_ref` — ancestry *is* the right test here since a branch that
+     was never PR'd was never squash-merged). Otherwise it's unpushed/unmerged work with no PR
      protecting it — never touch.
    - **Any other lookup failure** (auth/network/API error — anything whose message isn't the specific
      "no pull requests found" string) → fail closed, leave it. A transient API hiccup must never read as
@@ -48,6 +56,16 @@ For each directory matching `${WF_WORKTREE_ROOT:-/tmp}/wf-*`:
 No new flags for a dry-run: `gc`'s own logic already refuses to guess (fail-closed on ambiguity), and every
 disposition is logged via `note()`, so running it is itself low-risk and inspectable. Safe to run any time,
 repeatedly (idempotent — nothing left to sweep on a second run is a silent no-op).
+
+**Smoke coverage** (design-review F2): `worktree_gc_smoke.sh`, wired into `.aar-ci/checks.sh`'s existing
+"`wf.sh` changed → these smokes are required" gate alongside `identity_smoke.sh` etc. Hermetic — a fake `gh`
+on `PATH` driven by per-branch fixture files, real local git repos/worktrees under a temp dir (no network, no
+real tokens). Covers: another repo's worktree in the same shared root is skipped untouched; a dirty worktree
+is kept regardless of PR state; an OPEN PR is kept; a MERGED/CLOSED PR with local HEAD == `headRefOid` is
+swept (worktree removed + branch deleted); a MERGED/CLOSED PR with local HEAD *ahead* of `headRefOid` is kept
+(the F1 fix); no PR + branch merged into main is swept; no PR + branch with unmerged commits is kept; a PR
+lookup that fails for a reason other than "no pull requests found" is kept (fail-closed); a repeat run over
+an already-clean root is a no-op.
 
 **Docs**: point `finish`'s "cleans the worktree" guidance and the escape-hatches area at `gc` as the sweep for
 runs that *don't* reach `finish` — one line each in `SKILL.md` and `RUNBOOK.md`.
