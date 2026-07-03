@@ -233,6 +233,13 @@ if printf '%s\n' "${PATHS[@]}" | grep -q '^plugins/aar-engineering/skills/ship-c
   else
     err "wf.sh changed but issue_authoring_smoke.sh missing — cannot verify the create/comment authoring allowlist (#11)"
   fi
+  GC_SMOKE="$ROOT/plugins/aar-engineering/skills/ship-change/scripts/worktree_gc_smoke.sh"
+  if [ -f "$GC_SMOKE" ]; then
+    echo "[checks] worktree gc smoke" >&2
+    bash "$GC_SMOKE" >&2 && ok "worktree_gc smoke" || err "worktree_gc smoke FAILED"
+  else
+    err "wf.sh changed but worktree_gc_smoke.sh missing — cannot verify the abandoned-worktree sweep (#32)"
+  fi
   # gh write-guard bypass STATIC check (#165): every internal `gh` call in wf.sh MUST carry the WF_GH_INTERNAL
   # marker (route through real_gh / gh_author / git_push_author) so the guard never intercepts an engineer
   # call. An unmarked call would silently break the SWE pipeline under the wrapper — fail the build on it.

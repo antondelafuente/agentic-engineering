@@ -83,6 +83,18 @@ install without engineer Apps. When used, the driver emits a terminal warning an
 trail when there is a natural target. Treat that warning like the close-gate override: acceptable for bootstrap
 or rescue, not the normal path.
 
+## Abandoned worktrees/branches
+
+`finish` only cleans up its `/tmp/wf-*` worktree + local `change/*` branch on a successful merge. A run that
+gets blocked, superseded, withdrawn, or whose implementing session just dies leaves both behind — nothing
+else sweeps them. Run `wf.sh gc [repo]` (default `repo`: the cwd's git root) to sweep: it removes a worktree
+only when its branch's PR is closed/merged AND local HEAD exactly matches the PR's last known head
+(`headRefOid` — proven necessary because a squash-merge's landed commit is never an ancestor of the branch,
+so "PR merged" alone doesn't prove local content is represented), or when there's no PR at all and the branch
+is fully merged into main. A dirty worktree, an open PR, unmerged/unpushed work with no PR, or any
+unresolvable PR lookup is left alone. Idempotent and safe to run any time — including as routine housekeeping
+after abandoning or closing a run, not just as a one-off cleanup.
+
 ## Escape hatches (when the automation wedges)
 
 Because `enforce_admins` is ON, there is **no standing admin merge-bypass** — that's intentional (the agent
