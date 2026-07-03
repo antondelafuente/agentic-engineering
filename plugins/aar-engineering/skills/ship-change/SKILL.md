@@ -51,8 +51,18 @@ dispatcher launches it and owns three duties:
 2. **Watch** — the dispatcher watches the implementor on a short cadence (~5 min: code tickets finish in
    under an hour, so a silent mid-turn wedge — e.g. a provider API error leaving the session idle-alive —
    must be caught fast; contrast the ~20-min cadence appropriate for long-running experiment executors, cf.
-   `automated-researcher#292`). Nudge if wedged-idle; a session-local watch loop dies with the dispatcher's
-   own session, so re-arm after any dispatcher restart/handoff.
+   `automated-researcher#292`). The point of the cadence is **stall inspection**, not exit detection: the
+   dispatcher must actually LOOK at the implementor's pane each cycle and apply judgment (wedged-idle →
+   nudge; merged → reap), not merely learn when the session ends. That requires a mechanism that
+   **re-invokes the dispatcher's own judgment** on a short cadence — a background timer or an exit-only
+   monitor doesn't satisfy this even if it runs continuously, because neither puts a judged look at the
+   pane on every cycle. On a harness with a periodic-reinvocation primitive, use it: on Claude Code that's
+   the **`/loop` skill** — `/loop 5m` armed with a pane-inspection prompt (nudge if wedged-idle, reap once
+   merged) — because each firing re-invokes the dispatcher agent itself, and the loop is visible/cancellable
+   harness machinery rather than an ad-hoc background process the harness can kill without anyone noticing.
+   Ad-hoc background sleep-loops and exit-only monitors do not satisfy the contract. A session-local watch
+   (loop or otherwise) dies with the dispatcher's own session, so re-arm after any dispatcher
+   restart/handoff. Non-Claude dispatchers use their harness's equivalent periodic-reinvocation mechanism.
 3. **Lifecycle** — the implementor must not linger after its PR merges: the dispatch spec ends with a
    self-termination instruction, and the dispatcher runs a reap backstop after verifying the merge.
 
