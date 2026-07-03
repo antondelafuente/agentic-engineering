@@ -1,4 +1,4 @@
-# Proposal: fix dangling "#49's to define" + absorb the cross-repo-reference rule (#36)
+# Proposal: fix dangling "`#49`'s to define" + absorb the cross-repo-reference rule (#36)
 
 > The canonical design doc (ADR + PR description). Reviewed by `--scaffold` before build. Lands on main.
 
@@ -7,7 +7,7 @@
 Two independent rough edges in this repo's constitution:
 
 1. The `ready` bullet in the DISPOSITIONS block ends with "...the precise boundary of which `ready`
-   Issues it acts on autonomously (especially by blast radius) is #49's to define." That `#49` is a
+   Issues it acts on autonomously (especially by blast radius) is `#49`'s to define." That `#49` is a
    bare, un-qualified reference: in *this* repo it resolves to whatever antondelafuente/agentic-engineering#49
    happens to be, not the issue the sentence actually means
    (antondelafuente/automated-researcher#49, which is CLOSED as not-aligned-with-current-direction).
