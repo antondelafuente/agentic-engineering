@@ -40,6 +40,25 @@ then succeeds only because the required approval is present. Architectural and m
 **same** gate — the cross-family review + checks, author-triaged; there is no classification step and no
 per-change human design approval. As-built config + escape hatches: `RUNBOOK.md`.
 
+## Who runs this skill — the dispatcher contract
+
+This skill is typically executed end-to-end by a dispatched one-shot implementor session; a longer-lived
+dispatcher launches it and owns three duties:
+
+1. **Model tier** — the implementor runs an execution-tier model; quality is protected by the cross-family
+   review + fail-closed gates, not by which model authors (same rationale documented in `cloud-ship` SKILL.md
+   after #26).
+2. **Watch** — the dispatcher watches the implementor on a short cadence (~5 min: code tickets finish in
+   under an hour, so a silent mid-turn wedge — e.g. a provider API error leaving the session idle-alive —
+   must be caught fast; contrast the ~20-min cadence appropriate for long-running experiment executors, cf.
+   `automated-researcher#292`). Nudge if wedged-idle; a session-local watch loop dies with the dispatcher's
+   own session, so re-arm after any dispatcher restart/handoff.
+3. **Lifecycle** — the implementor must not linger after its PR merges: the dispatch spec ends with a
+   self-termination instruction, and the dispatcher runs a reap backstop after verifying the merge.
+
+How each duty is implemented (session runtime, model pinning, reaping) is deployment-owned; this skill
+states only the contract.
+
 ## The non-negotiable properties (the driver enforces them — don't work around them)
 
 - **Worktree-from-the-start.** All branch work happens in a dedicated git worktree, never by switching the
