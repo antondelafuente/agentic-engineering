@@ -69,24 +69,32 @@ DISPOSITIONS drift-check does not cover this section, so it needs no packaged-co
 > ## Cross-repo references
 >
 > Cross-repo issue/PR references are fully qualified (`owner/repo#N` or a full URL) **everywhere** they're
-> written — commits, PR bodies, design docs, the journal, and chat — never a bare `#N`. A bare `#N` auto-links
-> against whatever repo happens to be rendering it, not the repo the writer meant, and silently 404s or points
-> at the wrong Issue. The dangling `#49` this repo's own DISPOSITIONS block used to carry (see git history) is
-> a live example of exactly this failure.
+> written — commits, PRs, docs, and chat — never a bare `#N`. A bare `#N` auto-links against whatever repo
+> happens to be rendering it, not the repo the writer meant, and silently resolves to the wrong Issue or
+> 404s. This repo's own DISPOSITIONS block once carried exactly this failure — a `#49` meant for a different
+> repo, fixed above.
+
+(Dropped "the journal" from the original instance wording — that's a research/instance-specific surface this
+general engineering-team repo shouldn't name; "docs" already covers it generically.)
 
 This is placed as its own top-level section (after "The merge gate", before the DISPOSITIONS block) since it's
 a general norm, not pipeline mechanics.
 
 ## Blast radius
 
-Docs-only change to `AGENTS.md` and `plugins/aar-engineering/skills/ship-change/references/DISPOSITIONS.md`.
-No code, no CI script changes, no behavior change to the ship-change pipeline itself — the auto-handler
-eligibility rule (`ready` is eligible, not auto-merged) is unchanged in substance, only its wording. The
-DISPOSITIONS drift-check (`.aar-ci/checks.sh`) will run as-is and requires the two blocks to stay identical,
-which this change satisfies by construction (same text landed in both files).
+Docs-only change to `AGENTS.md` and the packaged copy `plugins/aar-engineering/skills/ship-change/references/DISPOSITIONS.md`.
+No code changes, no behavior change to the ship-change pipeline itself — the auto-handler eligibility rule
+(`ready` is eligible, not auto-merged) is unchanged in substance, only its wording. The DISPOSITIONS
+drift-check (`.aar-ci/checks.sh`) requires the two blocks to stay byte-identical, which this change satisfies
+by construction (same text landed in both files). Because this PR edits a non-manifest file inside the
+`aar-engineering` plugin, `plugins/aar-engineering/.claude-plugin/plugin.json`'s version is bumped
+(0.4.6 -> 0.4.7) per `.aar-ci/checks.sh`'s version-bump check.
 
-Does not touch `~/AGENTS.md` (the instance constitution) — out of scope for this repo's PR; the instance-side
-prune of its now-duplicated cross-repo-reference bullet is a separate, instance-owned edit.
+Does not touch `~/AGENTS.md` (the instance constitution) — that's a different repo (`hetzner-home`) with its
+own shared, currently-dirty working tree owned by other running sessions; editing it isn't safe or in scope
+from this worktree. `~/AGENTS.md:106` still carries the now-duplicated cross-repo-reference bullet after this
+PR merges; pruning it (or replacing it with a pointer to this repo's new canonical section) is a follow-up,
+instance-owned edit for whoever next holds the single-writer hat on that file.
 
 ## Rollout + rollback
 

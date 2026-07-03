@@ -30,6 +30,14 @@ A change merges only on: cross-family `--code` review with **zero HIGH** (re-run
 tracked `.aar-ci/checks.sh` + behavior smoke green, and (on enforced repos) the required opposite-family
 native approval. A crashed/garbled review never reads as clean.
 
+## Cross-repo references
+
+Cross-repo issue/PR references are fully qualified (`owner/repo#N` or a full URL) **everywhere** they're
+written — commits, PRs, docs, and chat — never a bare `#N`. A bare `#N` auto-links against whatever repo
+happens to be rendering it, not the repo the writer meant, and silently resolves to the wrong Issue or 404s.
+(This repo's own DISPOSITIONS block once carried exactly this failure — a `#49` meant for a different repo,
+fixed below.)
+
 <!-- DISPOSITIONS:START -->
 ## Issue tracker — dispositions
 
@@ -42,8 +50,10 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`ready`** — actionable now; any design is settled and lives in the implementing PR itself (design-in-PR).
   Implement + merge on the cross-family review + checks. `ready` is the only disposition **eligible**
   for auto-handling — but eligibility is not blind auto-merge: the auto-handler still runs the full
-  cross-family review + checks, and the precise boundary of which `ready` Issues it acts on autonomously
-  (especially by blast radius) is #49's to define.
+  cross-family review + checks. No Issue is auto-implemented without an explicit dispatch (a human or a
+  dispatcher session naming it); the precise boundary of which `ready` Issues get acted on with less
+  oversight (especially by blast radius) is undecided, and will be revisited if/when a standing
+  auto-handler is actually proposed.
 - **`needs-shaping`** — a direction, too vague to start; needs scoping into `ready` first, through a
   conversation with the researcher (which may produce a few `ready` tickets).
 - **`blocked`** — decided but gated on a prerequisite; carries a `blocked-by: #N` body line. (When the
