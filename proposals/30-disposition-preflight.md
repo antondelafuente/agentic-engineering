@@ -30,9 +30,10 @@ Two one-line touches, both defense-in-depth around the existing close-gate:
    must **cite it** — a comment on the issue summarizing/linking the shaping discussion. An agent asked to
    *implement* an issue never flips its disposition label as a step of implementing it. This states the norm
    for every lane and makes the flip auditable, mirroring the intended pattern already exercised on
-   `automated-researcher#311` / `#313`. It does **not**, by itself, add a new mechanical gate to any lane other
-   than the ship-change pre-flight above — `cloud-ship`'s close-time `ready` check (its existing mechanical
-   backstop) is unchanged by this PR; a matching early pre-flight there is out of scope here (see Alternatives).
+   `antondelafuente/automated-researcher#311` / `antondelafuente/automated-researcher#313`. It does **not**, by
+   itself, add a new mechanical gate to any lane other than the ship-change pre-flight above — `cloud-ship`'s
+   close-time `ready` check (its existing mechanical backstop) is unchanged by this PR; a matching early
+   pre-flight there is out of scope here (see Alternatives).
 
 Both blocks are kept byte-identical between `AGENTS.md` and the packaged `DISPOSITIONS.md` reference, per the
 existing sync contract enforced by `.aar-ci/checks.sh`'s disposition-reference-drift check.
@@ -43,14 +44,15 @@ existing sync contract enforced by `.aar-ci/checks.sh`'s disposition-reference-d
   non-`ready` issue, but doesn't stop it from self-flipping the label as a workaround and then proceeding — the
   contract line is what makes that specific evasion explicitly disallowed and auditable.
 - **Only the contract line, no pre-flight.** Rejected: without the pre-flight check, the failure is still only
-  caught at `finish`, after the worktree/design-doc/review work is already sunk — the whole point of #315 is to
-  move the check earlier.
+  caught at `finish`, after the worktree/design-doc/review work is already sunk — the whole point of
+  `antondelafuente/automated-researcher#315` is to move the check earlier.
 - **Enforce the pre-flight mechanically in `wf.sh start`** (reject the `start` call itself if the issue isn't
   `ready`). Deferred: `wf.sh start` doesn't currently look up issue labels, and adding that lookup + a failure
   mode (missing label vs. wrong disposition vs. lookup/permission failure — the existing `finish`-gate override
   precedent, `WF_ALLOW_NONREADY_CLOSE=1`, suggests any mechanical gate needs its own escape hatch too) is a
-  larger, separable change from the two one-line documentation touches #315 scoped, and from what this PR's
-  mirror issue (#30, ready as filed) asked for. The close-gate at `finish` already provides the mechanical
+  larger, separable change from the two one-line documentation touches
+  `antondelafuente/automated-researcher#315` scoped, and from what this PR's mirror issue (#30, ready as filed)
+  asked for. The close-gate at `finish` already provides the mechanical
   backstop today — a PR closing a non-`ready` issue fails closed regardless of what an agent did in between —
   so this proposal's pre-flight is a genuine cost-saving instructional check (catch it before work is spent),
   not the only thing standing between an agent and a bad merge. A follow-up could harden `start` itself
