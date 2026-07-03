@@ -76,6 +76,26 @@ section:
 -compatible additions to one skill, no interface break). This proposal doc is the ADR/changelog record — the
 repo keeps no separate `CHANGELOG` file.
 
+## Design review triage (`--scaffold`, 3 findings)
+
+- **F1 (HIGH, duplicate-merge risk survives past dispatch)** — ACCEPT. The dispatch-time guard alone leaves a
+  TOCTOU window: the cloud run itself takes 30-45+ minutes, long enough for a rival on-box PR to merge and
+  close the issue before the cloud run finishes. Added a cheap, targeted close-time check to
+  `close-cloud-ship.sh`'s `do_close()`: refuse if the issue is not `OPEN` before doing any PR/approve/merge
+  work — this is exactly the #22 incident shape (an on-box PR closed the issue while a completed cloud run's
+  PASS record was still live). A full re-run of the dupe guard's open-PR/branch scan at close time was
+  considered and rejected as unnecessary scope: the issue-state check is a strict, sufficient subset for the
+  actual failure mode reported.
+- **F2 (MED, instance default hardcoded into product)** — ACCEPT. Made the default overridable via
+  `$CLOUD_SHIP_MODEL` (`MODEL="${CLOUD_SHIP_MODEL:-claude-sonnet-5}"`), so an instance can point the default
+  elsewhere without editing the script — same env-seam shape as this plugin's other instance-configurable
+  defaults (`WF_ENGINEER_TOKEN_CMD_*`). The literal `claude-sonnet-5` fallback stays, since #26 explicitly
+  specifies it as the default.
+- **F3 (MED, branch-naming assumption not enforced at the interface)** — ACCEPT. Added a `validate_branch`
+  check requiring `-b <branch>` to match `cloud-ship/<issue>-<slug>` (the convention every existing invocation
+  already follows), so the dupe guard's own branch-detection regex can always find a dispatch launched through
+  this script on a later duplicate check.
+
 ## Alternatives considered
 
 - **Three separate PRs, one per issue.** Rejected for this round: all three touch the same two files
@@ -101,14 +121,16 @@ repo keeps no separate `CHANGELOG` file.
 
 ## Blast radius
 
-Touches only `plugins/aar-engineering/skills/cloud-ship/scripts/dispatch-cloud-ship.sh` (new flags, new guard),
-a new `plugins/aar-engineering/skills/cloud-ship/scripts/dispatch_cloud_ship_smoke.sh`, `SKILL.md` (docs), the
-`.aar-ci/checks.sh` cloud-ship smoke block (one more smoke invocation, same trigger paths), and
-`aar-engineering`'s `plugin.json` version. No change to `close-cloud-ship.sh`, the record contract, the
-engineer-identity seams, or any other skill/plugin. Backward compatible: `-m/--model` and `--force` are new
-optional flags with a safe default (pin to Sonnet; guard is on unless overridden); an existing invocation with
-neither flag now also gets the model pin and the dupe guard, which is the intended hardening, not a breaking
-change. The fake-HOME discovery smoke is unaffected (no new skill, no manifest surface change).
+Touches `plugins/aar-engineering/skills/cloud-ship/scripts/dispatch-cloud-ship.sh` (new flags, new guard), a
+new `plugins/aar-engineering/skills/cloud-ship/scripts/dispatch_cloud_ship_smoke.sh`, one added check in
+`close-cloud-ship.sh`'s `do_close()` (the F1 issue-state guard — additive, before any existing step), `SKILL.md`
+(docs), the `.aar-ci/checks.sh` cloud-ship smoke block (one more smoke invocation, same trigger paths), and
+`aar-engineering`'s `plugin.json` version. No change to the record contract, the `gate`/`dispo-gate` pure
+functions, the engineer-identity seams, or any other skill/plugin. Backward compatible: `-m/--model` and
+`--force` are new optional flags with a safe default (pin to Sonnet; guard is on unless overridden); an
+existing invocation with neither flag now also gets the model pin and the dupe guard, which is the intended
+hardening, not a breaking change. The fake-HOME discovery smoke is unaffected (no new skill, no manifest
+surface change).
 
 ## Rollout + rollback
 
