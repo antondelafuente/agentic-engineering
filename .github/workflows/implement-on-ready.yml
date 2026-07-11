@@ -1,0 +1,255 @@
+name: implement-on-ready
+
+# GitHub-native SWE pipeline, implement leg (automated-researcher#378 / agentic-engineering#43).
+# A `ready` label on an Issue launches an execution-tier Claude implementor that opens a PR; a separate
+# workflow (review-on-pr.yml) runs the cross-family Codex review and approves/requests-changes; existing
+# branch protection + this workflow's auto-merge step close the loop. See AGENTS.md "GitHub-native SWE
+# pipeline (BYOK)" for the full trust model this implements.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to (re-)dispatch (label events don't fire retroactively)"
+        required: true
+        type: number
+
+concurrency:
+  group: implement-issue-${{ github.event.inputs.issue_number || github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+env:
+  # Allowlist for the authorization predicate: the researcher + the two engineer GitHub Apps. Hard-coded
+  # deliberately (per the issue's explicit trust model) rather than sourced from repo config, so a
+  # compromised in-repo file can't widen who can trigger a privileged run.
+  ALLOWLIST: "antondelafuente claude-code-engineer[bot] codex-engineer[bot]"
+
+jobs:
+  implement:
+    name: implement
+    runs-on: ubuntu-latest
+    # Coarse pre-filter only (automated-researcher#381): the authoritative gate is the "Resolve + authorize
+    # issue" step below, which canonicalizes via the shared shell helper. GitHub Actions `if:` expressions
+    # have no string-strip primitive to share that helper with, so each login is checked against both known
+    # representations (event-payload "<slug>[bot]" and CLI/GraphQL "app/<slug>") explicitly here instead.
+    if: |
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'ready'
+        && contains(fromJSON('["antondelafuente","claude-code-engineer[bot]","codex-engineer[bot]","app/claude-code-engineer","app/codex-engineer"]'), github.event.sender.login))
+      || (github.event_name == 'workflow_dispatch'
+        && contains(fromJSON('["antondelafuente","claude-code-engineer[bot]","codex-engineer[bot]","app/claude-code-engineer","app/codex-engineer"]'), github.actor))
+    outputs:
+      pr_number: ${{ steps.resolve_outputs.outputs.pr_number }}
+      status: ${{ steps.resolve_outputs.outputs.status }}
+    steps:
+      # Checkout runs FIRST (automated-researcher#381/#382 design-review F1): the authorize step below
+      # sources a helper script from the working tree, which must exist before it's sourced. Checkout has
+      # no dependency on the authorize step's outputs, so reordering is a no-op other than making the file
+      # reachable; a base-branch checkout is trusted content regardless of which step runs first.
+      - name: Checkout base branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout v7.0.0
+        with:
+          persist-credentials: false
+
+      # Re-verify BEFORE minting any token: the job-level `if:` above is a coarse pre-filter on the
+      # triggering actor; this step re-fetches the issue's CURRENT state (author + labels) with the
+      # ambient read-only GITHUB_TOKEN and is the actual authorization gate. This closes the
+      # workflow_dispatch gap where dispatch alone (without a fresh `ready` check) could implement a
+      # not-ready issue, and re-confirms freshness for the labeled path too.
+      - name: Resolve + authorize issue
+        id: resolve_issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          LABEL_EVENT_ISSUE: ${{ github.event.issue.number }}
+          DISPATCH_ISSUE: ${{ github.event.inputs.issue_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # automated-researcher#381: canonicalize both sides before comparing, so the CLI/GraphQL
+          # "app/<slug>" author form and the allowlist's "<slug>[bot]" form compare equal.
+          source "$GITHUB_WORKSPACE/.github/scripts/canonical-login.sh"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            ISSUE_NUMBER="$DISPATCH_ISSUE"
+          else
+            ISSUE_NUMBER="$LABEL_EVENT_ISSUE"
+          fi
+          [ -n "$ISSUE_NUMBER" ] || { echo "::error::no issue number resolved for this event"; exit 1; }
+
+          AUTHOR=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json author --jq '.author.login')
+          LABELS=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          AUTHOR_CANON=$(canonical_login "$AUTHOR")
+
+          ok=0
+          for a in $ALLOWLIST; do [ "$(canonical_login "$a")" = "$AUTHOR_CANON" ] && ok=1; done
+          if [ "$ok" != 1 ]; then
+            echo "::error::issue #$ISSUE_NUMBER author '$AUTHOR' is not allowlisted; refusing to implement"
+            exit 1
+          fi
+          case ",$LABELS," in
+            *,ready,*) : ;;
+            *) echo "::error::issue #$ISSUE_NUMBER does not currently carry the 'ready' label (labels: $LABELS); refusing to implement"; exit 1 ;;
+          esac
+
+          echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Render implementor prompt
+        id: render_prompt
+        env:
+          ISSUE_NUMBER: ${{ steps.resolve_issue.outputs.issue_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          body="$(cat .github/prompts/implement.md)"
+          body="${body//\{\{ISSUE_NUMBER\}\}/$ISSUE_NUMBER}"
+          body="${body//\{\{REPO\}\}/$REPO}"
+          {
+            echo "prompt<<PROMPT_EOF"
+            echo "$body"
+            echo "PROMPT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint claude engineer App token
+        id: mint_claude_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # actions/create-github-app-token v3.2.0
+        with:
+          app-id: ${{ secrets.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      # automated-researcher#384: claude-code-action auto-installs Claude Code on the runner with no
+      # version pin, and that auto-install has landed on versions that crash at SDK launch before any API
+      # call (opaque "SDK execution error", runs 29134553863/29134534809) — a known startup-crash class in
+      # upstream anthropics/claude-code-action#947/#892/#804. The exact same invocation is verified to succeed
+      # (exit 0) on Claude Code v2.1.207, so pin to that version explicitly instead of trusting auto-install.
+      # ubuntu-latest ships Node.js/npm preinstalled, so no actions/setup-node step is needed here; if that
+      # ever stops being true, add actions/setup-node (pinned by full commit SHA) directly before this step.
+      # Bumping the pinned version later (once a newer release is verified) is a normal PR editing the
+      # version string below.
+      - name: Install pinned Claude Code
+        id: install_claude
+        run: |
+          set -euo pipefail
+          npm install -g @anthropic-ai/claude-code@2.1.207
+          echo "path=$(command -v claude)" >> "$GITHUB_OUTPUT"
+
+      # automated-researcher#387: implement-on-ready died ~0.4s after SDK launch on every run under
+      # anthropics/claude-code-action; debug automated-researcher#386 proved the raw pinned CLI (this exact invocation)
+      # exits 0 with clean structured output on a real runner (run 29135070985), isolating the crash to
+      # the wrapper action's own bun/agent-SDK harness (matches upstream anthropics/claude-code-action#947/#892/#804). This launches
+      # the CLI directly instead, doing explicitly what the wrapper did implicitly. The wrapper can be
+      # re-adopted later, in one step, once upstream fixes its startup crash.
+      - name: Configure implementor git identity
+        env:
+          CLAUDE_TOKEN: ${{ steps.mint_claude_token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # id is the numeric prefix from the bot's own noreply commit email (confirmed from this repo's
+          # git log: claude-code-engineer[bot] <294932622+claude-code-engineer[bot]@users.noreply.github.com>),
+          # what the wrapper action's bot_id/bot_name inputs set up for us before.
+          git config user.name 'claude-code-engineer[bot]'
+          git config user.email '294932622+claude-code-engineer[bot]@users.noreply.github.com'
+          # Ephemeral runner, no persistent tracking branch needed — plain `git push origin <branch>`
+          # (no -u) from inside the agent's own Bash tool calls picks this up.
+          git remote set-url origin "https://x-access-token:${CLAUDE_TOKEN}@github.com/${REPO}.git"
+
+      - name: Run pinned Claude Code CLI (implementor)
+        id: run_claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # So `gh` calls the agent makes from its own Bash tool are authorized as the engineer App.
+          GH_TOKEN: ${{ steps.mint_claude_token.outputs.token }}
+          PROMPT: ${{ steps.render_prompt.outputs.prompt }}
+          CLAUDE_BIN: ${{ steps.install_claude.outputs.path }}
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          # `set -e` + `pipefail` on the `| tee` below already fails this step loudly if the CLI itself
+          # exits non-zero (a crash, a timeout) — no separate exit-code check needed for that case.
+          #
+          # If tool-permission denials surface in practice, the documented fallback knob is
+          # `--permission-mode bypassPermissions` on the invocation below — not enabled preemptively.
+          # -c (compact): stream-json input is line-delimited — pretty-printed (jq's default) multi-line
+          # output here breaks the CLI's line parser ("Error parsing streaming input line", verified
+          # locally against the pinned 2.1.207 binary).
+          jq -nc --arg content "$PROMPT" '{"type":"user","message":{"role":"user","content":$content}}' \
+            | "$CLAUDE_BIN" -p --input-format stream-json --output-format stream-json --verbose \
+                --model claude-sonnet-5 \
+                --allowedTools Bash,Edit,Write,Read,Grep,Glob \
+                --json-schema '{"type":"object","required":["status"],"properties":{"status":{"type":"string","enum":["opened","blocked"]},"pr_number":{"type":["integer","null"]}}}' \
+            | tee /tmp/claude_stream.jsonl
+
+          # design-review finding 1 (automated-researcher#387 doc): don't let a CLI run that exited 0 but produced no result
+          # event / no structured_output on it fall through resolve_outputs' `// "blocked"` default, which
+          # exits 0 on empty input — validate here and fail loudly instead.
+          structured=$(jq -c 'select(.type=="result") | .structured_output // empty' /tmp/claude_stream.jsonl | tail -n1)
+          if [ -z "$structured" ] || [ "$structured" = "null" ]; then
+            echo "::error::claude CLI exited 0 but produced no structured_output in its result event"
+            exit 1
+          fi
+          echo "structured_output=$structured" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve job outputs
+        id: resolve_outputs
+        env:
+          STRUCTURED: ${{ steps.run_claude.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          # automated-researcher#382: the schema's top-level allOf (encoding "status=opened requires
+          # integer pr_number" / "status=blocked requires null pr_number") had to be dropped — the
+          # Anthropic API rejects oneOf/allOf/anyOf at the top level. Enforce both directions of that
+          # invariant here instead: opened fails loudly on a missing/invalid pr_number (rather than
+          # silently emitting an empty one), and any non-opened status always clears pr_number to empty
+          # regardless of what the model returned, so a stray integer on a blocked result can never reach
+          # enable-automerge's `pr_number != ''` gate (code-review finding).
+          pr_number=$(echo "$STRUCTURED" | jq -r '.pr_number // empty')
+          status=$(echo "$STRUCTURED" | jq -r '.status // "blocked"')
+          if [ "$status" = "opened" ]; then
+            case "$pr_number" in
+              ''|*[!0-9]*) echo "::error::structured_output has status=opened but pr_number ('$pr_number') is not a valid integer"; exit 1 ;;
+            esac
+          else
+            pr_number=""
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+  enable-automerge:
+    name: enable-automerge
+    needs: implement
+    if: needs.implement.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      # Fresh runner, no repo checkout, no exposure to whatever the implementor job's host state ended up
+      # as — mints its own token and only ever talks to the GitHub API. Mirrors openai/codex-action's own
+      # security guidance (run the agent as the last step in ITS job; do control-plane work in a new job).
+      - name: Mint claude engineer App token
+        id: mint_claude_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # actions/create-github-app-token v3.2.0
+        with:
+          app-id: ${{ secrets.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Enable auto-merge (squash)
+        env:
+          GH_TOKEN: ${{ steps.mint_claude_token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.implement.outputs.pr_number }}
+        run: |
+          set -uo pipefail
+          if ! gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash; then
+            echo "::warning::could not enable auto-merge on PR #$PR_NUMBER (disabled repo-wide, or missing permission) — commenting instead of failing"
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Auto-merge could not be enabled automatically (repo setting or permissions). Enable it manually, or merge once the codex review approves." || true
+          fi
