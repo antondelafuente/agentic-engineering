@@ -95,7 +95,7 @@ jobs:
           fi
           # Exact-match against the parsed label list (not substring/CSV matching): a label whose name
           # itself contains a comma could otherwise satisfy a ",$LABELS," CSV match without an actual
-          # "ready" label present (code-review finding, PR #44 residual).
+          # "ready" label present (code-review finding, this repo's PR #44 residual).
           if ! jq -e 'any(.[]; . == "ready")' <<<"$LABELS_JSON" >/dev/null; then
             LABELS=$(jq -r 'join(", ")' <<<"$LABELS_JSON")
             echo "::error::issue #$ISSUE_NUMBER does not currently carry the 'ready' label (labels: $LABELS); refusing to implement"
