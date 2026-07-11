@@ -33,10 +33,10 @@ native approval. A crashed/garbled review never reads as clean.
 ## GitHub-native SWE pipeline (BYOK) — event-driven `ready` → merged PR
 
 For this repo (and `automated-researcher`, where this capability shipped first — see
-automated-researcher#378 / this repo's own #43), the `ship-change` lifecycle above can run **without a
+automated-researcher#378 / this repo's own agentic-engineering#43), the `ship-change` lifecycle above can run **without a
 session dispatching it**: a `ready` label launches an execution-tier Claude implementor via GitHub Actions,
 and PR events run the cross-family Codex review natively. This section is this repo's own copy of that
-capability — it is what this PR (#44) adds, and it is deliberately the **last** change to this repo shipped
+capability — it is what this PR (agentic-engineering#44) adds, and it is deliberately the **last** change to this repo shipped
 through the old tmux-dispatcher path; every change after this one, including corrections to this pipeline
 itself, ships by labeling an Issue `ready`.
 
@@ -129,7 +129,7 @@ itself, ships by labeling an Issue `ready`.
   this PR merges, via the owner-token maintenance path (`WF_GH_ALLOW_OWNER_WRITE=1`) — an engineer-bot App
   token cannot modify branch protection on itself. Until that lands, `checks.yml` still runs and posts its
   status on every PR, but is not yet a *required* gate for auto-merge; this gap is deliberately scoped and
-  time-bounded (see PR #44's description), not silently accepted indefinitely.
+  time-bounded (see agentic-engineering#44's description), not silently accepted indefinitely.
 
 ## Cross-repo references
 
@@ -151,7 +151,7 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`ready`** — actionable now; any design is settled and lives in the implementing PR itself (design-in-PR).
   Implement + merge on the cross-family review + checks. `ready` is the only disposition **eligible**
   for auto-handling — but eligibility is not blind auto-merge: the auto-handler still runs the full
-  cross-family review + checks. **Resolved (#43):** on a repo with the GitHub-native SWE pipeline wired (an
+  cross-family review + checks. **Resolved (agentic-engineering#43):** on a repo with the GitHub-native SWE pipeline wired (an
   `implement-on-ready.yml`-equivalent workflow present), an ALLOWLISTED actor's `ready` label flip **is**
   itself the explicit dispatch — the workflow's own authorization predicate (allowlisted labeler AND a
   freshly-reverified, allowlisted issue author, before any token is minted) is what makes this safe, not a

@@ -69,7 +69,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Fetch prior review history
-        # GitHub-native disposition state (#380): prior codex review rounds + the author's issue-comment
+        # GitHub-native disposition state (automated-researcher#380): prior codex review rounds + the author's issue-comment
         # responses, so the reviewer can adjudicate rather than re-litigating findings the author already
         # fixed or disputed. Read-only `gh api` calls against this same PR — the job's read token suffices.
         # automated-researcher#389 review: restricted to the pipeline's own trusted identities (same

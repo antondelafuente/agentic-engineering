@@ -1,6 +1,6 @@
 name: address-review
 
-# GitHub-native SWE pipeline, mention leg (automated-researcher#398 / #378's missing return path). An
+# GitHub-native SWE pipeline, mention leg (automated-researcher#398 / automated-researcher#378's missing return path). An
 # allowlisted mention comment on a bot-authored PR re-dispatches the claude engineer implementor onto the
 # SAME PR branch to address review findings; pushing fires `synchronize`, which re-runs review-on-pr.yml
 # automatically (its own cancel-in-progress handles stale rounds — this workflow never invokes the review
@@ -106,10 +106,18 @@ jobs:
           body="${body//\{\{BASE_REF\}\}/$BASE_REF}"
           body="${body//\{\{COMMENT_URL\}\}/$COMMENT_URL}"
           body="${body//\{\{COMMENT_BODY\}\}/$COMMENT_BODY}"
+
+          # code-review finding (PR #44 round 2, MED): $body embeds COMMENT_BODY verbatim -- the
+          # triggering comment's own raw text, from an ALLOWLISTED author but not otherwise trusted
+          # content. A fixed delimiter ("PROMPT_EOF") could be matched by a line inside that comment
+          # body and used to terminate the heredoc early, injecting extra keys into $GITHUB_OUTPUT.
+          # Same fix already applied in review-on-pr.yml (automated-researcher#389) for the same class
+          # of embedded-untrusted-body risk: a per-run random delimiter closes it off.
+          delim="prompt_$(openssl rand -hex 20)"
           {
-            echo "prompt<<PROMPT_EOF"
-            echo "$body"
-            echo "PROMPT_EOF"
+            echo "prompt<<$delim"
+            printf '%s\n' "$body"
+            echo "$delim"
           } >> "$GITHUB_OUTPUT"
 
       - name: Mint claude engineer App token

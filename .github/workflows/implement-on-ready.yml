@@ -128,7 +128,7 @@ jobs:
       # automated-researcher#384: claude-code-action auto-installs Claude Code on the runner with no
       # version pin, and that auto-install has landed on versions that crash at SDK launch before any API
       # call (opaque "SDK execution error", runs 29134553863/29134534809) — a known startup-crash class in
-      # upstream claude-code-action issues #947/#892/#804. The exact same invocation is verified to succeed
+      # upstream anthropics/claude-code-action#947/#892/#804. The exact same invocation is verified to succeed
       # (exit 0) on Claude Code v2.1.207, so pin to that version explicitly instead of trusting auto-install.
       # ubuntu-latest ships Node.js/npm preinstalled, so no actions/setup-node step is needed here; if that
       # ever stops being true, add actions/setup-node (pinned by full commit SHA) directly before this step.
@@ -142,9 +142,9 @@ jobs:
           echo "path=$(command -v claude)" >> "$GITHUB_OUTPUT"
 
       # automated-researcher#387: implement-on-ready died ~0.4s after SDK launch on every run under
-      # anthropics/claude-code-action; debug PR #386 proved the raw pinned CLI (this exact invocation)
+      # anthropics/claude-code-action; debug automated-researcher#386 proved the raw pinned CLI (this exact invocation)
       # exits 0 with clean structured output on a real runner (run 29135070985), isolating the crash to
-      # the wrapper action's own bun/agent-SDK harness (matches upstream #947/#892/#804). This launches
+      # the wrapper action's own bun/agent-SDK harness (matches upstream anthropics/claude-code-action#947/#892/#804). This launches
       # the CLI directly instead, doing explicitly what the wrapper did implicitly. The wrapper can be
       # re-adopted later, in one step, once upstream fixes its startup crash.
       - name: Configure implementor git identity
@@ -188,7 +188,7 @@ jobs:
                 --json-schema '{"type":"object","required":["status"],"properties":{"status":{"type":"string","enum":["opened","blocked"]},"pr_number":{"type":["integer","null"]}}}' \
             | tee /tmp/claude_stream.jsonl
 
-          # design-review finding 1 (#387 doc): don't let a CLI run that exited 0 but produced no result
+          # design-review finding 1 (automated-researcher#387 doc): don't let a CLI run that exited 0 but produced no result
           # event / no structured_output on it fall through resolve_outputs' `// "blocked"` default, which
           # exits 0 on empty input — validate here and fail loudly instead.
           structured=$(jq -c 'select(.type=="result") | .structured_output // empty' /tmp/claude_stream.jsonl | tail -n1)

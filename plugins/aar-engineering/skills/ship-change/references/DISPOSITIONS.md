@@ -10,7 +10,7 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`ready`** — actionable now; any design is settled and lives in the implementing PR itself (design-in-PR).
   Implement + merge on the cross-family review + checks. `ready` is the only disposition **eligible**
   for auto-handling — but eligibility is not blind auto-merge: the auto-handler still runs the full
-  cross-family review + checks. **Resolved (#43):** on a repo with the GitHub-native SWE pipeline wired (an
+  cross-family review + checks. **Resolved (agentic-engineering#43):** on a repo with the GitHub-native SWE pipeline wired (an
   `implement-on-ready.yml`-equivalent workflow present), an ALLOWLISTED actor's `ready` label flip **is**
   itself the explicit dispatch — the workflow's own authorization predicate (allowlisted labeler AND a
   freshly-reverified, allowlisted issue author, before any token is minted) is what makes this safe, not a

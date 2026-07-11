@@ -5,7 +5,7 @@
 #   1. canonical_login() maps exactly the two GitHub-observed App-identity representations to the same
 #      canonical form, and does NOT collapse a bare (untrusted) slug into matching the App.
 #   2. the workflow actually sources the helper AFTER checkout (helper reachability from the real
-#      workflow step, not just unit correctness of the function in isolation — #382 design-review F1/F3).
+#      workflow step, not just unit correctness of the function in isolation — automated-researcher#382 design-review F1/F3).
 set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

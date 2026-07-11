@@ -7,7 +7,7 @@
 Today, every change to this repo ships through a dispatched tmux session running `ship-change`'s `wf.sh`
 lifecycle by hand: a dispatcher launches an implementor, watches its pane on a 5-minute cadence, nudges
 stalls, and reaps the session after merge. `automated-researcher` proved (agentic-engineering#43's design
-trail, automated-researcher#378 spec v2, bug-chain fixes #381-#408) that this same lifecycle can run
+trail, automated-researcher#378 spec v2, bug-chain fixes automated-researcher#381-#408) that this same lifecycle can run
 **without a session dispatching it**: a `ready` label on an Issue launches an execution-tier Claude
 implementor via GitHub Actions; PR events run the cross-family Codex review natively; branch protection +
 auto-merge close the loop. That capability exists only on `automated-researcher` (private) today. This repo
@@ -22,12 +22,12 @@ This PR is that follow-up, and it is also the **last** old-style dispatch for th
 
 Copy the four workflows, the two prompts, and the identity-canonicalization helper verbatim in mechanism
 from `automated-researcher`'s `main` (not from the spec — main already embodies every bug-chain fix through
-#408), and adapt only what the repo/trust-model difference requires:
+automated-researcher#408), and adapt only what the repo/trust-model difference requires:
 
 1. **`.github/workflows/implement-on-ready.yml`** — `issues.labeled` (`ready`) or `workflow_dispatch` →
    re-verifies the issue's live author + label state (never trusts the coarse job-level `if:` alone) →
    renders `.github/prompts/implement.md` → mints a `claude-code-engineer[bot]` App token → runs the pinned
-   Claude Code CLI (`2.1.207`, launched directly rather than through the wrapper action, per #387/#388) with
+   Claude Code CLI (`2.1.207`, launched directly rather than through the wrapper action, per automated-researcher#387/#388) with
    `--model claude-sonnet-5` → opens a PR closing the issue → a second, fresh-runner job enables auto-merge.
 2. **`.github/workflows/review-on-pr.yml`** — `pull_request` (opened/synchronize/ready_for_review), gated to
    same-repo PRs authored by the claude engineer bot (the fork-PR / human-PR exclusion is a job-level `if:`
@@ -102,7 +102,7 @@ right, not merely present:
 ## Alternatives considered
 
 - **Leave agentic-engineering on the tmux-dispatcher path indefinitely.** Rejected: automated-researcher's
-  numbers (bug-chain fixes #381-#408 all already fixed on main) show the GH-native path is now the proven,
+  numbers (bug-chain fixes automated-researcher#381-#408 all already fixed on main) show the GH-native path is now the proven,
   lower-supervision-cost mechanism; there's no reason for the team's own tooling repo to lag its own
   product's rollout, and the design ticket (#43) named this repo explicitly as in-scope.
 - **Widen the allowlist to any repo collaborator, since it's public and PRs are review-gated anyway.**
@@ -114,7 +114,7 @@ right, not merely present:
   patching this repo's own.** Rejected per the dispatch brief: this repo's `checks.sh` already has
   repo-specific sections (README-namespace check, DISPOSITIONS sync, a dozen per-plugin smoke hooks)
   automated-researcher's doesn't carry, and vice versa. Ported only the two behavior fixes
-  (`fake_home_smoke.sh`'s `#396` API-key fallback seeding and `#407` stderr surfacing / `command -v claude`
+  (`fake_home_smoke.sh`'s automated-researcher#396 API-key fallback seeding and automated-researcher#407 stderr surfacing / `command -v claude`
   pre-check) into this repo's existing script, and added one new `checks.sh` section (canonical-login smoke)
   this repo didn't need before this PR.
 
