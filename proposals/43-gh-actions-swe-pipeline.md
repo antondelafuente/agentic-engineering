@@ -133,6 +133,59 @@ right, not merely present:
   *required-check* addition for the new `checks` status (and, if desired, a required-review addition
   mirroring automated-researcher's) is a **post-merge** step — see Rollout below.
 
+## Design review triage (`--scaffold`, PR #44 round 1: 4 HIGH, 2 MED)
+
+- **F1 (HIGH, "skips the mandatory --scaffold design review") — DISPUTED.** The GH-native pipeline
+  deliberately replaces the generic `ship-change` per-run stage sequence (design doc → `--scaffold` review →
+  implement → `--code` review) with design-in-ticket + a single PR-side review, exactly as
+  automated-researcher's already-live copy does and as issue #43's body states explicitly ("Design: lives IN
+  the ticket... a formal design gate is redundant ceremony"). This PR's own one-time addition of the
+  pipeline *is* going through the full `wf.sh` lifecycle including this very `--scaffold` round — the
+  finding conflates the (retired-by-design) per-issue design-review stage with the (still-mandatory, still
+  running) design review of the pipeline-adding change itself.
+- **F2 (HIGH, "hard-codes one customer... instead of exposing trusted deployment configuration seams") —
+  DISPUTED.** The hard-coded allowlist lives in this repo's own `.github/workflows/*.yml` (repo-level CI
+  config), not in the generic `aar-engineering` plugin (which does use config seams —
+  `WF_ENGINEER_TOKEN_CMD_*`, `WF_READONLY_TOKEN_CMD`, etc. — throughout). automated-researcher's identical
+  copy hard-codes its own allowlist for a stated security reason: "hard-coded deliberately... so a
+  compromised in-repo file can't widen who can trigger a privileged run" (implement-on-ready.yml). Sourcing
+  the allowlist from repo config would reintroduce exactly the vulnerability that comment documents.
+  Verified byte-for-byte match against automated-researcher's copy (same three identities, same two login
+  representations each) and against this repo's live bot commit identities.
+- **F3 (HIGH, "workflows active at merge while the checks required-status gate is deferred") — DEFERRED, per
+  explicit dispatch-brief scoping.** Real: until branch protection requires the new `checks` status (and
+  optionally the native review), `gh pr merge --auto` on a future dispatched PR could complete once the
+  codex review approves, without `checks.sh` having been a *required* gate (it still runs and posts a
+  status either way). This exact ordering — land the workflows, then a human/owner-token pass adds the
+  required-check — mirrors how automated-researcher itself operates today (branch protection there
+  currently requires `checks`, added outside this PR-equivalent's own diff) and is explicitly named in this
+  dispatch's brief as a post-merge, owner-token step (branch-protection writes need the elevated-owner-token
+  + `WF_GH_ALLOW_OWNER_WRITE=1` path per the ship-change RUNBOOK, not something an engineer-bot-authored PR
+  can do to itself). Mitigated in this revision by stating the gap explicitly and prominently (AGENTS.md
+  pipeline section + PR description "post-merge" checklist) rather than leaving it implicit, and by the fact
+  that nothing in this PR *triggers* on merge — the risk window only opens when a future issue is labeled
+  `ready`, which the same human/dispatcher controls.
+- **F4 (HIGH, "ready-label-flip = dispatch contradicts the disposition contract's 'undecided' boundary") —
+  ACCEPTED.** Real and correctly targeted: the canonical `DISPOSITIONS.md` block still said the auto-handler
+  boundary was undecided, which this PR's own pipeline section would have directly contradicted. Issue #43
+  names resolving exactly this as in-scope ("The DISPOSITIONS.md auto-handler boundary gets its answer...
+  resolved as: ready on the coding repos = dispatched, with a concurrency cap as the spend guard"). Fixed:
+  the `ready` bullet in both `AGENTS.md`'s canonical block and its synced
+  `plugins/aar-engineering/skills/ship-change/references/DISPOSITIONS.md` copy now states the resolution —
+  on a repo with the pipeline wired, an allowlisted actor's label flip **is** the explicit dispatch (the
+  workflow's own re-verified authorization predicate is what makes it safe); repos without the pipeline
+  wired keep the old rule. (automated-researcher's own DISPOSITIONS block still says "undecided" — it
+  predates this resolution and is out of scope for this PR; worth a follow-up there.)
+- **F5 (MED, "two independently live implementations of the same mechanism, no canonical source") —
+  DEFERRED.** Real tension, but no reusable-workflow infrastructure exists yet to de-duplicate GitHub Actions
+  YAML across independent repos without adding a cross-repo trust dependency neither pipeline currently
+  needs. Noted as a candidate follow-up issue, not blocking this rollout.
+- **F6 (MED, "P0/P1 codex-action reviewer replaces verify-claims --code without demonstrating semantic
+  equivalence") — DEFERRED.** Mirrors automated-researcher's live precedent exactly. The semantic mapping is
+  explicit in the guidance markers this PR adds: P0 blocks `APPROVE` (⇔ HIGH blocks `wf.sh finish`'s merge),
+  P1 is recorded but non-blocking (⇔ MED/LOW). A stronger formal equivalence proof is future work, not a
+  blocker for adopting the same mechanism this repo's own sibling product already runs.
+
 ## Rollout + rollback
 
 - **Rollout:** merges as an ordinary reviewed PR through the (final) manual `wf.sh` dispatch. No workflow in

@@ -10,10 +10,14 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`ready`** — actionable now; any design is settled and lives in the implementing PR itself (design-in-PR).
   Implement + merge on the cross-family review + checks. `ready` is the only disposition **eligible**
   for auto-handling — but eligibility is not blind auto-merge: the auto-handler still runs the full
-  cross-family review + checks. No Issue is auto-implemented without an explicit dispatch (a human or a
-  dispatcher session naming it); the precise boundary of which `ready` Issues get acted on with less
-  oversight (especially by blast radius) is undecided, and will be revisited if/when a standing
-  auto-handler is actually proposed.
+  cross-family review + checks. **Resolved (#43):** on a repo with the GitHub-native SWE pipeline wired (an
+  `implement-on-ready.yml`-equivalent workflow present), an ALLOWLISTED actor's `ready` label flip **is**
+  itself the explicit dispatch — the workflow's own authorization predicate (allowlisted labeler AND a
+  freshly-reverified, allowlisted issue author, before any token is minted) is what makes this safe, not a
+  separate per-run naming step; per-issue concurrency dedup (no global worker pool) is the spend guard, not
+  a human queueing each run — see this product's "GitHub-native SWE pipeline (BYOK)" AGENTS.md section. On a repo without that pipeline
+  wired, the label alone is not enough: no Issue is auto-implemented without a separate explicit dispatch (a
+  human or a dispatcher session naming it).
 - **`needs-shaping`** — a direction, too vague to start; needs scoping into `ready` first, through a
   conversation with the researcher (which may produce a few `ready` tickets).
 - **`blocked`** — decided but gated on a prerequisite; carries a `blocked-by: #N` body line. (When the
