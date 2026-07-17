@@ -18,6 +18,27 @@ The **engineering** counterpart to `run-experiment`: where `run-experiment` runs
 this ships a change to the *product itself*. It belongs to the **SWE pipeline** layer (see
 `AGENTS.md`), not the shipped research product.
 
+## Routing — pipeline-first
+
+**Deterministic test for "pipeline-enabled":** the target repo's `AGENTS.md` contains the "GitHub-native SWE
+pipeline" section AND the repo carries the `ready` label. If the two signals conflict, `AGENTS.md` wins.
+
+**Pipeline-enabled repos — this is the DEFAULT shipping flow, not the lifecycle below.** File a well-shaped
+Issue via `gh issue create` (body shape: Problem / Design / Non-goals / Acceptance — design it concrete
+enough for an implementor who cannot ask questions), then **STOP**. `ready` is applied by the researcher (a
+human), never self-applied by the agent — the label flip on an allowlisted repo IS the dispatch
+(`implement-on-ready.yml` picks it up automatically; `AGENTS.md` "GitHub-native SWE pipeline"). Do not begin
+implementing locally while waiting for the flip, and do not run the in-session lifecycle below.
+
+**The in-session lifecycle below is the FALLBACK**, selectable only when the repo is not pipeline-enabled, OR
+the change meets one of these can't-take criteria:
+- requires box-local state/secrets unavailable to the cloud implementor
+- requires coordinated multi-repo atomic changes
+- edits instance-only config outside any repo
+
+See the legacy fallback subsection below (marked LEGACY) for how the fallback path itself is run once
+selected.
+
 **Cloud execution, when configured.** When the deployment configures a Claude Code cloud environment, prefer
 the sibling `cloud-ship` skill for repo-self-contained changes: it runs the author + cross-family review legs
 on a cloud VM and gates the bot close on the trusted host (the box holds the engineer keys). `ship-change`
@@ -40,29 +61,45 @@ then succeeds only because the required approval is present. Architectural and m
 **same** gate — the cross-family review + checks, author-triaged; there is no classification step and no
 per-change human design approval. As-built config + escape hatches: `RUNBOOK.md`.
 
-## Who runs this skill — the dispatcher contract
+## The shaping session's remaining duties (pipeline-enabled repos)
 
-This skill is typically executed end-to-end by a dispatched one-shot implementor session; a longer-lived
-dispatcher launches it and owns three duties:
+On a pipeline-enabled repo the human-facing agent doesn't dispatch or watch an implementor — the GitHub
+Actions pipeline does that (`AGENTS.md` "GitHub-native SWE pipeline"). What's left for the shaping session:
+
+1. **Issue quality.** Shape the Issue so an implementor who cannot ask questions can act on it directly:
+   Problem / Design / Non-goals / Acceptance, concrete enough to remove ambiguity before it ever reaches
+   `ready`.
+2. **Answering `needs-dispatcher`.** When the implementor or a review finding escalates by labeling the PR
+   (or the Issue, if no PR yet) `needs-dispatcher`, reply in an issue comment and remove the label — the
+   re-flip to `ready` is again the researcher's transition, not something you do as part of answering. Scope
+   is **clarification only**: a genuine design change means re-shaping the Issue, not steering the PR
+   directly.
+3. **`gh pr update-branch <n>`** on THIS issue's pipeline PR, when its base branch has gained a fix the PR
+   needs. This is the one PR-mutation the shaping agent is authorized to make directly.
+
+### LEGACY — the dispatcher contract (fallback path only)
+
+**Entry condition:** only when the Routing test (above) selects the fallback — the repo is not
+pipeline-enabled, or the change meets one of the three can't-take criteria. **Never use this path on a
+pipeline-enabled repo**, even if it seems faster: it bypasses the GitHub-native pipeline's own authorization
+and audit trail.
+
+Once the fallback is selected, this skill is typically executed end-to-end by a dispatched one-shot
+implementor session; a longer-lived dispatcher launches it and owns three duties:
 
 1. **Model tier** — the implementor runs an execution-tier model; quality is protected by the cross-family
    review + fail-closed gates, not by which model authors (same rationale documented in `cloud-ship` SKILL.md
    after #26).
-2. **Watch** — the dispatcher watches the implementor on a short cadence (~5 min: code tickets finish in
-   under an hour, so a silent mid-turn wedge — e.g. a provider API error leaving the session idle-alive —
-   must be caught fast; contrast the ~20-min cadence appropriate for long-running experiment executors, cf.
-   `automated-researcher#292`). The point of the cadence is **stall inspection**, not exit detection: the
-   dispatcher must actually LOOK at the implementor's pane each cycle and apply judgment (wedged-idle →
-   nudge; merged → reap), not merely learn when the session ends. That requires a mechanism that
-   **re-invokes the dispatcher's own judgment** on a short cadence — a background timer or an exit-only
-   monitor doesn't satisfy this even if it runs continuously, because neither puts a judged look at the
-   pane on every cycle. On a harness with a periodic-reinvocation primitive, use it: on Claude Code that's
-   the **`/loop` skill** — `/loop 5m` armed with a pane-inspection prompt (nudge if wedged-idle, reap once
-   merged) — because each firing re-invokes the dispatcher agent itself, and the loop is visible/cancellable
-   harness machinery rather than an ad-hoc background process the harness can kill without anyone noticing.
+2. **Watch** — the dispatcher inspects the implementor's pane on a short cadence (~5 min: code tickets finish
+   in under an hour, so a silent mid-turn wedge must be caught fast) and applies judgment each cycle
+   (wedged-idle → nudge; merged → reap) — not merely learning when the session ends. That needs a mechanism
+   that **re-invokes the dispatcher's own judgment** on that cadence; a background timer or an exit-only
+   monitor doesn't satisfy it even if it runs continuously. On Claude Code, use the **`/loop` skill** —
+   `/loop 5m` armed with a pane-inspection prompt — because each firing re-invokes the dispatcher agent
+   itself, and the loop is visible/cancellable harness machinery rather than an ad-hoc background process.
    Ad-hoc background sleep-loops and exit-only monitors do not satisfy the contract. A session-local watch
-   (loop or otherwise) dies with the dispatcher's own session, so re-arm after any dispatcher
-   restart/handoff. Non-Claude dispatchers use their harness's equivalent periodic-reinvocation mechanism.
+   dies with the dispatcher's own session, so re-arm after any dispatcher restart/handoff. Non-Claude
+   dispatchers use their harness's equivalent periodic-reinvocation mechanism.
 3. **Lifecycle** — the implementor must not linger after its PR merges: the dispatch spec ends with a
    self-termination instruction, and the dispatcher runs a reap backstop after verifying the merge.
 
