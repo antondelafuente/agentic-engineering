@@ -13,6 +13,9 @@ The engineering team's tooling — ship product/scaffold changes through a GitHu
 - **aar-engineering** — the `ship-change` lifecycle (Issue -> worktree -> design doc -> draft PR -> cross-family `--scaffold`/`--code` review -> checks -> fail-closed merge).
 - **verify-claims** — the cross-family review engine ship-change gates on (`--scaffold`/`--code`), self-contained in this repo.
 
+"aar" in path/plugin names is a historical abbreviation ("Automated Alignment Researcher", the project's
+original name); the current framing is simply "automated researcher".
+
 See `AGENTS.md` for the engineering pipeline and the Issue disposition contract.
 
 Running the full lifecycle yourself (not just installing the skills) takes more than that: the pipeline's

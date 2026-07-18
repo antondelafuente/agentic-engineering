@@ -145,7 +145,7 @@ the review text below is the audit trail the box copies onto the PR.
   on a session that is already **finished or abandoned**, for post-mortem readback (it materializes the
   transcript as a local jsonl).
 - Both incidents that motivated this section happened 2026-07-02: a `claude --teleport` into a healthy running
-  session wedged it, and a `codex` AAR attached to a stalled session and misread its branch-checkout error as a
+  session wedged it, and a `codex` agent attached to a stalled session and misread its branch-checkout error as a
   crash.
 
 ## Composes
