@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# skill_consistency_check.sh (agentic-engineering#54) — five deterministic passes over every
+# skill_consistency_check.sh (agentic-engineering#54) — four deterministic passes over every
 # plugins/*/skills/*/SKILL.md, so the docs-as-policy layer doesn't drift from the tooling or itself:
 #   1. wf.sh command existence (verb + scripts/<name> resolution)               — hard-fail
 #   2. single-sourced routing (a canonical `<!-- ROUTING:<slug> --> paragraph`)  — flag only
 #   3. frontmatter/body agreement (the pipeline-first preference, ship/cloud)   — hard-fail
 #   4. retired-phrase denylist (RETIRED_PHRASES.txt, outside marked LEGACY)     — hard-fail
-#   5. prohibited-op grep (a fenced-block ambient `gh` WRITE prescription)      — hard-fail
+# Ambient `gh` write hygiene is intentionally NOT a pass here: it's enforced at RUNTIME by ship-change's
+# gh-guard.sh, which blocks the write and redirects to the wf.sh path. A former pass 5 tried to mirror the
+# guard's argument parser at doc-time and was removed as an unmaintainable divergence burden — deliberate
+# researcher decision, 2026-07-18, deviating from this issue's original five-pass design (see
+# agentic-engineering#57's review history).
 # Runs unconditionally against the FULL plugins/ tree (doc consistency is a whole-tree invariant, not an
 # incremental-diff property) — no non-goal semantic/LLM checking, no enforcement outside plugins/.
 # Usage: skill_consistency_check.sh [root]   — root defaults to this script's own repo (optional override
@@ -63,7 +67,7 @@ def split_frontmatter(text):
 
 
 # ---------------------------------------------------------------------------
-# shared: legacy-span computation (pass 4 + pass 5's carve-out)
+# shared: legacy-span computation (pass 4's carve-out)
 # ---------------------------------------------------------------------------
 LEGACY_START = "<!-- LEGACY:START -->"
 LEGACY_END = "<!-- LEGACY:END -->"
@@ -114,8 +118,9 @@ if os.path.isfile(WF_PATH):
     wf_text = open(WF_PATH, encoding="utf-8").read()
     # Top-level case labels sit at column 0 inside `case "$CMD" in ... esac`; nested case blocks (the
     # issue/fdispo sub-dispatch) are indented, so a column-0 anchor safely extracts only the real verbs.
-    # A verb retired down to a bare `die "... retired ..."` body (e.g. `classify`, #248) is excluded —
-    # inspecting the arm's first non-comment statement keeps this self-maintaining for future retirements.
+    # A verb retired down to a bare `die "... retired ..."` body (e.g. `classify`,
+    # automated-researcher#248) is excluded — inspecting the arm's first non-comment statement keeps this
+    # self-maintaining for future retirements.
     RETIRED_DIE_RE = re.compile(r'^die\s+"[^"]*retired')
     verb_matches = list(re.finditer(r'^([A-Za-z][A-Za-z0-9_-]*(?:\|[A-Za-z0-9_-]+)*)\)', wf_text, re.M))
     for i, m in enumerate(verb_matches):
@@ -142,9 +147,11 @@ if os.path.isfile(WF_PATH):
     if not top_verbs:
         err("pass1: could not extract any top-level wf.sh verbs from wf.sh — parser or wf.sh itself may be broken")
     if not issue_subverbs:
-        warn("pass1: could not extract wf.sh's 'issue' sub-verb allowlist — issue sub-verbs will not be checked")
+        err("pass1: could not extract wf.sh's 'issue' sub-verb allowlist — a wf.sh format change must break "
+            "this check visibly, not silently disable it")
     if not fdispo_subverbs:
-        warn("pass1: could not extract wf.sh's 'fdispo' sub-verb allowlist — fdispo actions will not be checked")
+        err("pass1: could not extract wf.sh's 'fdispo' sub-verb allowlist — a wf.sh format change must break "
+            "this check visibly, not silently disable it")
 else:
     err(f"pass1: wf.sh not found at {relpath(WF_PATH)} — cannot validate wf.sh verbs")
 
@@ -339,158 +346,11 @@ for path, text in docs.items():
 note(f"pass4: checked {len(phrases)} retired phrase(s) against {len(docs)} file(s), {pass4_hits} unmarked hit(s)")
 
 # ---------------------------------------------------------------------------
-# Pass 5 — prohibited-op grep: a fenced-block ambient `gh` WRITE prescription (hard-fail)
+# (No pass 5 here.) Ambient `gh` write hygiene is enforced at RUNTIME by ship-change's gh-guard.sh, which
+# blocks the write and redirects to the wf.sh path. A doc-time textual mirror of the guard's argument
+# parser was removed as unmaintainable (see this PR's review history) — deliberate researcher decision,
+# 2026-07-18, deviating from agentic-engineering#54's original five-pass design.
 # ---------------------------------------------------------------------------
-# THREAT MODEL: pass 5 is doc-time defense-in-depth that mirrors gh-guard.sh's write classification for
-# prescriptions AS HONESTLY WRITTEN in these docs; adversarial obfuscation (command indirection, variable
-# expansion, heredocs, alias tricks) is explicitly OUT OF SCOPE here — the runtime guard (gh-guard.sh) is
-# the enforcement boundary that owns evasion. Future reviews should treat further evasion-form findings
-# against this pass as out of its declared scope.
-#
-# WRITE_VERBS is mirrored from gh-guard.sh (plugins/aar-engineering/skills/ship-change/scripts/gh-guard.sh,
-# the `issue|pr` case arm) — the runtime guard is the source of truth this doc-time pass exists to match.
-# Applied to BOTH nouns rather than kept as two hand-curated lists: a verb inapplicable to one noun never
-# appears in a real doc, so over-inclusion costs nothing, and the diverging-lists defect class disappears.
-# Update BOTH together when gh-guard.sh's issue|pr write classification changes.
-WRITE_VERBS = {
-    "create", "comment", "edit", "close", "reopen", "delete", "merge", "review", "ready",
-    "lock", "unlock", "pin", "unpin", "transfer", "develop", "update-branch",
-}
-NEGATION_RE = re.compile(r"\b(never|not|don'?t|avoid|no bare|against|prohibited|forbidden)\b", re.I)
-RESEARCHER_RE = re.compile(r"researcher", re.I)
-
-# gh-guard.sh's own subcommand/verb scan (its next_word helper, lines ~72-112) skips arbitrary global
-# flags — WITH their value, whether attached (`--flag=value`) or separated (`--flag value`) — both before
-# the subcommand (`gh -R o/r issue create`) and again between the subcommand and its verb (`gh issue -R o/r
-# create`), since the guard calls next_word twice: once from index 0 for `sub`, once from `sub_idx+1` for
-# `verb`. Mirror both skips with the same flag-skipping group reused in both positions, rather than
-# anchoring `issue|pr|api` immediately after `gh`.
-GH_FLAG_SRC = r"--?[A-Za-z][A-Za-z-]*(?:[= ]\S+)?"
-GH_FLAGS_SRC = r"(?:\s+(?:" + GH_FLAG_SRC + r"))*"
-GH_PREFIX_SRC = r"\bgh" + GH_FLAGS_SRC + r"\s+"
-GH_WRITE_RE = re.compile(GH_PREFIX_SRC + r"(issue|pr)" + GH_FLAGS_SRC + r"\s+([a-z][a-z-]*)", re.I)
-
-# `gh api`: mirrors gh-guard.sh's own default-deny for the `api` subcommand — a write is any non-GET/HEAD
-# method or any body-implying field flag; a bare `gh api <path>` with neither defaults to GET and is a read.
-GH_API_RE = re.compile(GH_PREFIX_SRC + r"api\b.*", re.I)
-GH_API_METHOD_RE = re.compile(r"(?:^|\s)-X\s*(\S+)|(?:^|\s)--method[=\s]+(\S+)", re.I)
-# gh-guard.sh:229-230 classifies ANY token starting with -f/-F as a body flag (its bash `-f*|-F*` arm), not
-# just the bare/`=`-joined forms — mirror that here so attached short flags like `-ftitle=x`/`-Fbody=@file`
-# are caught too.
-GH_API_BODY_RE = re.compile(
-    r"(?:^|\s)(-f\S*|-F\S*|--field(?:=\S*)?|--raw-field(?:=\S*)?|--input(?:=\S*)?)(?=\s|$)"
-)
-
-
-def strip_quotes(s):
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
-        return s[1:-1]
-    return s
-
-
-# Shell line-continuations: a fenced prescription may split one logical command across lines with a
-# trailing backslash (`gh issue \` + newline + indentation + `comment ...`). Collapse each such split to a
-# single space on a COPY used only for pass-5 regex matching, so `gh issue \<NL> comment` and `gh api ...
-# \<NL> --method POST` are visible to GH_WRITE_RE / GH_API_RE the same as an unsplit line would be. A
-# parallel index map recovers each normalized character's original offset, so escape-window lookback
-# (negation/researcher/legacy) and line-number reporting still point at the real, unnormalized text.
-CONTINUATION_RE = re.compile(r'\\\n[ \t]*')
-
-
-def normalize_continuations(text):
-    out = []
-    idx_map = []
-    i, n = 0, len(text)
-    while i < n:
-        m = CONTINUATION_RE.match(text, i)
-        if m:
-            out.append(' ')
-            idx_map.append(m.start())
-            i = m.end()
-        else:
-            out.append(text[i])
-            idx_map.append(i)
-            i += 1
-    return ''.join(out), idx_map
-
-
-def fenced_blocks(text):
-    # CommonMark fence grammar: a fence OPENS on a line with up to 3 leading spaces then a run of >=3
-    # backticks or tildes (an info string may follow); it CLOSES only on a later line with the SAME fence
-    # character, a run >= the opening length, and nothing but whitespace after. An unclosed run extends to
-    # EOF. This (rather than a blind ``` toggle) covers tilde fences and nested longer-backtick fences.
-    spans = []
-    offset = 0
-    open_at = None
-    fence_char = None
-    fence_len = 0
-    for line in text.split("\n"):
-        line_len = len(line)
-        if open_at is None:
-            m = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
-            if m:
-                fence_char, fence_len, open_at = m.group(1)[0], len(m.group(1)), offset
-        else:
-            m = re.match(r'^ {0,3}(' + re.escape(fence_char) + r'{3,})\s*$', line)
-            if m and len(m.group(1)) >= fence_len:
-                spans.append((open_at, offset + line_len))
-                open_at = None
-        offset += line_len + 1
-    if open_at is not None:
-        spans.append((open_at, len(text)))
-    return spans
-
-
-def escaped(text, spans, fstart, abs_pos):
-    if in_spans(abs_pos, spans):
-        return True
-    preceding = text[max(fstart, abs_pos - 60): abs_pos]
-    if NEGATION_RE.search(preceding):
-        return True
-    researcher_window = text[max(fstart, abs_pos - 200): abs_pos]
-    if RESEARCHER_RE.search(researcher_window):
-        return True
-    return False
-
-
-pass5_checked = 0
-for path, text in docs.items():
-    rel = relpath(path)
-    spans = legacy_spans_by_path[path]
-    for fstart, fend in fenced_blocks(text):
-        block = text[fstart:fend]
-        norm_block, idx_map = normalize_continuations(block)
-        for m in GH_WRITE_RE.finditer(norm_block):
-            pass5_checked += 1
-            noun, verb = m.group(1).lower(), m.group(2).lower()
-            if verb not in WRITE_VERBS:
-                continue
-            abs_pos = fstart + idx_map[m.start()]
-            if escaped(text, spans, fstart, abs_pos):
-                continue
-            line_no = text.count("\n", 0, abs_pos) + 1
-            err(
-                f"pass5: {rel}:{line_no}: fenced block prescribes ambient 'gh {noun} {verb}' (a WRITE op) "
-                f"outside a researcher-action or legacy-marked context"
-            )
-        for m in GH_API_RE.finditer(norm_block):
-            pass5_checked += 1
-            line = m.group(0)
-            method_m = GH_API_METHOD_RE.search(line)
-            method = strip_quotes(method_m.group(1) or method_m.group(2)).upper() if method_m else "GET"
-            has_body = bool(GH_API_BODY_RE.search(line))
-            if method in ("GET", "HEAD") and not has_body:
-                continue
-            abs_pos = fstart + idx_map[m.start()]
-            if escaped(text, spans, fstart, abs_pos):
-                continue
-            line_no = text.count("\n", 0, abs_pos) + 1
-            err(
-                f"pass5: {rel}:{line_no}: fenced block prescribes an ambient 'gh api' WRITE "
-                f"(method={method}, body={has_body}) outside a researcher-action or legacy-marked context"
-            )
-
-note(f"pass5: checked {pass5_checked} fenced 'gh issue|pr|api' mention(s)")
 
 print("[skill-consistency] " + ("FAIL" if fail else "PASS"), file=sys.stderr)
 sys.exit(1 if fail else 0)

@@ -133,12 +133,14 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/experiment-lifecycle/skills/
   done
 fi
 
-# 1f. skill consistency (agentic-engineering#54): five deterministic passes over every
+# 1f. skill consistency (agentic-engineering#54): four deterministic passes over every
 #     plugins/*/skills/*/SKILL.md (wf.sh command existence, single-sourced routing, frontmatter/body
-#     agreement, retired-phrase denylist, prohibited-op grep) so the docs-as-policy layer can't silently
-#     drift from the tooling or itself (the PR #51 incident this exists to catch at doc-time). Runs
-#     UNCONDITIONALLY every invocation — doc consistency is a whole-tree invariant, not an incremental-diff
-#     property, so every PR (including one that never touches plugins/) is covered.
+#     agreement, retired-phrase denylist) so the docs-as-policy layer can't silently drift from the
+#     tooling or itself (the agentic-engineering#51 incident this exists to catch at doc-time). Ambient
+#     `gh` write hygiene is enforced at RUNTIME by ship-change's gh-guard.sh, not here — a former doc-time
+#     mirror of the guard's parser was removed as unmaintainable (agentic-engineering#57's review history).
+#     Runs UNCONDITIONALLY every invocation — doc consistency is a whole-tree invariant, not an
+#     incremental-diff property, so every PR (including one that never touches plugins/) is covered.
 SKILL_CONSISTENCY="$ROOT/.aar-ci/skill_consistency_check.sh"
 if [ -f "$SKILL_CONSISTENCY" ]; then
   echo "[checks] skill consistency (plugins/*/skills/*/SKILL.md)" >&2
@@ -393,10 +395,10 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^(\.github/scripts/canonical(-login|_
 fi
 
 # 14. skill-consistency smoke (agentic-engineering#54): fixture-based regression test for the 1f check
-#     above — asserts a reintroduced PR #51 round-3 error (`wf.sh issue edit`) fails pass 1, a reintroduced
-#     round-8 error (contradictory cloud-ship frontmatter/body assertion) fails pass 3, an unmarked retired
-#     phrase fails pass 4, a fenced ambient `gh` write fails pass 5, and pass 2 only WARNs. Runs when the
-#     checker, its smoke, or the retired-phrase denylist changed.
+#     above — asserts a reintroduced agentic-engineering#51 round-3 error (`wf.sh issue edit`) fails pass
+#     1, a reintroduced round-8 error (contradictory cloud-ship frontmatter/body assertion) fails pass 3,
+#     an unmarked retired phrase fails pass 4, and pass 2 only WARNs. Runs when the checker, its smoke, or
+#     the retired-phrase denylist changed.
 if printf '%s\n' "${PATHS[@]}" | grep -Eq '^(\.aar-ci/skill_consistency_check(_smoke)?\.sh|plugins/aar-engineering/RETIRED_PHRASES\.txt)$'; then
   SKC_SMOKE="$ROOT/.aar-ci/skill_consistency_check_smoke.sh"
   if [ -f "$SKC_SMOKE" ]; then
