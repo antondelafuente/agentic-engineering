@@ -9,8 +9,9 @@ description: >-
   GATE on that record + the live branch head (fail-closed: refuse unless Verdict PASS, branch matches, and the
   head is still the reviewed sha), then opens the PR as the authoring bot, approves as the opposite-family
   bot, and squash-merges pinned to the reviewed sha. Reuses ship-change's engineer-identity seams
-  (WF_ENGINEER_TOKEN_CMD_CLAUDE/CODEX); invents no new config. Use when the author+review must run on a cloud
-  VM (a big change that wants a fresh isolated context) rather than in-process on the box.
+  (WF_ENGINEER_TOKEN_CMD_CLAUDE/CODEX); invents no new config. On repos running the SWE pipeline, ship via a
+  ready-gated issue instead; cloud-ship covers repo-self-contained changes on repos WITHOUT the pipeline (or
+  pipeline can't-take cases needing cloud isolation).
 ---
 
 # cloud-ship — cloud dispatch + gated box-side close
