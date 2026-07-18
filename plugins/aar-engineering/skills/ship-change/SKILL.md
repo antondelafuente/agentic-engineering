@@ -39,25 +39,16 @@ above). One sequence, no unconditional create:
    <claude|codex> create -R <owner/repo> -t "..." -b "..."`, backed by `WF_ENGINEER_TOKEN_CMD_*`); ambient
    `gh` remains read-only. Body shape: Problem / Design / Non-goals / Acceptance — concrete enough for an
    implementor who cannot ask questions.
-3. **Found** → first check whether the existing issue's author is on the pipeline allowlist (`AGENTS.md`
-   "GitHub-native SWE pipeline", Authorization predicate):
-   - **Author not allowlisted** → file a fresh shaped issue through the engineer-token seam (allowlisted by
-     construction) that links the original (`wf.sh issue <claude|codex> create -R <owner/repo> -t "..." -b
-     "..."` referencing `#<N>`); leave the original OPEN with a cross-link comment (`wf.sh issue
-     <claude|codex> comment <N> -R <owner/repo> -b "..."` referencing `#<new>`). Closing the original is
-     optional and the researcher's call — never automatic.
-   - **Author allowlisted** → pick exactly one, in this order of preference:
-     - (a) its body already meets the design-in-description bar (same shape as above) → stop, nothing to
-       write; the researcher flips `ready` on THAT issue.
-     - (b) it needs the shaped design → post the design as an issue comment through the engineer-token seam
-       (`wf.sh issue <claude|codex> comment <N> -R <owner/repo> -b "..."`), headed **"Design of record
-       (supersedes body)"**, and stop — the implementor reads the full thread before acting. Do not edit the
-       body: the engineer-token seam has no body-edit verb — only `create`, `comment`, `close`, `label`,
-       `dispose` (`wf.sh issue <fam> <verb> …`).
-     - (c) only if the researcher explicitly prefers a clean body → file a fresh shaped issue that
-       references the stale one, then close the stale one, both via the engineer-bot token seam (`wf.sh
-       issue <claude|codex> create -R <owner/repo> -t "..." -b "..."` referencing `#<N>`, then `wf.sh issue
-       <claude|codex> close <N> -R <owner/repo> -c "Superseded by #<new>" --duplicate-of <new>`).
+3. **Found** → reuse the existing issue only when BOTH hold: its author is on the pipeline allowlist
+   (`AGENTS.md` "GitHub-native SWE pipeline", Authorization predicate) AND its body, as-written, already
+   meets the design-in-description bar (same shape as above). A comment never supplies or supersedes the
+   design — the implementor's spec is the body.
+   - **Both hold** → stop, nothing to write; the researcher flips `ready` on THAT issue.
+   - **Either fails** (author not allowlisted, or the body doesn't meet the bar) → file a fresh shaped issue
+     through the engineer-token seam (allowlisted by construction) that links the original (`wf.sh issue
+     <claude|codex> create -R <owner/repo> -t "..." -b "..."` referencing `#<N>`); leave the original OPEN
+     with a cross-link comment (`wf.sh issue <claude|codex> comment <N> -R <owner/repo> -b "..."` referencing
+     `#<new>`). Closing the original is optional and the researcher's call — never automatic.
 
 Then **STOP**. `ready` is applied by the researcher (a human), never self-applied by the agent — the label
 flip on an allowlisted repo IS the dispatch (`implement-on-ready.yml` picks it up automatically; `AGENTS.md`
