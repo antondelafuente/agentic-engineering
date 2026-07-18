@@ -39,7 +39,10 @@ above). One sequence, no unconditional create:
    <claude|codex> create -R <owner/repo> -t "..." -b "..."`, backed by `WF_ENGINEER_TOKEN_CMD_*`); ambient
    `gh` remains read-only. Body shape: Problem / Design / Non-goals / Acceptance — concrete enough for an
    implementor who cannot ask questions.
-3. **Found** → pick exactly one, in this order of preference:
+3. **Found** → pick exactly one, in this order of preference (reuse via (a)/(b) applies only when the
+   existing issue's author is on the pipeline allowlist — `AGENTS.md` "GitHub-native SWE pipeline",
+   Authorization predicate; a covering issue from a non-allowlisted author routes straight to (c), whose
+   fresh issue is allowlisted by construction):
    - (a) its body already meets the design-in-description bar (same shape as above) → stop, nothing to
      write; the researcher flips `ready` on THAT issue.
    - (b) it needs the shaped design → post the design as an issue comment through the engineer-token seam
