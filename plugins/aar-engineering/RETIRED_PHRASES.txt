@@ -1,0 +1,13 @@
+# Retired-phrase denylist for the plugins/ normative layer (agentic-engineering#54).
+#
+# One phrase per line, case-insensitive substring match against SKILL.md text. A hit is allowed only
+# inside an explicitly marked legacy section (an `<!-- LEGACY:START -->` … `<!-- LEGACY:END -->` span, or
+# a markdown heading whose text contains the word LEGACY, up to the next heading of equal-or-shallower
+# depth). Any hit outside a legacy span fails `.aar-ci/skill_consistency_check.sh`.
+#
+# `#`-prefixed lines and blank lines are ignored. Add a phrase here once its concept is fully retired
+# (superseded terminology that must never resurface unmarked) — see agentic-engineering#51 for the
+# incident (a supposedly-retired phrase reappearing) this denylist exists to catch at doc-time.
+dispatcher contract
+dispatch spec
+one-shot implementor
