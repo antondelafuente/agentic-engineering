@@ -301,7 +301,7 @@ jobs:
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["verdict", "findings"],
+              "required": ["verdict", "findings", "consolidated_report"],
               "properties": {
                 "verdict": { "enum": ["approve", "changes_requested"] },
                 "findings": {
