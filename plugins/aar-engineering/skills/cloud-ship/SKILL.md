@@ -9,8 +9,8 @@ description: >-
   GATE on that record + the live branch head (fail-closed: refuse unless Verdict PASS, branch matches, and the
   head is still the reviewed sha), then opens the PR as the authoring bot, approves as the opposite-family
   bot, and squash-merges pinned to the reviewed sha. Reuses ship-change's engineer-identity seams
-  (WF_ENGINEER_TOKEN_CMD_CLAUDE/CODEX); invents no new config. Use when the author+review must run on a cloud
-  VM (a big change that wants a fresh isolated context) rather than in-process on the box.
+  (WF_ENGINEER_TOKEN_CMD_CLAUDE/CODEX); invents no new config. On repos running the SWE pipeline, ship via a
+  ready-gated issue instead; cloud-ship covers repo-self-contained changes on repos WITHOUT the pipeline.
 ---
 
 # cloud-ship — cloud dispatch + gated box-side close
@@ -57,9 +57,9 @@ Fills `scripts/cloud-ship-brief.tmpl` (literal substitution of `@@REPO@@`/`@@ISS
   `claude --remote` session lands on the account/server default (currently Opus 4.8). Deployment policy is that
   gated execution legs run **Sonnet-tier** — the cross-family review + the fail-closed close gate are what
   protect quality here, not which model authors the change. Verified 2026-07-02 by transcript ground truth:
-  `--model <id>` does pin the VM session model. <!-- LEGACY:START -->(Same model-tier rationale, stated as a fuller
-  dispatcher-vs-implementor contract — model tier, watch cadence, lifecycle/reap — for the on-box path:
-  `ship-change` SKILL.md, "Who runs this skill — the dispatcher contract".)<!-- LEGACY:END -->
+  `--model <id>` does pin the VM session model. (Same model-tier rationale, stated as a fuller
+  dispatcher-vs-implementor contract — model tier, watch cadence, lifecycle/reap — for the on-box fallback
+  path: `ship-change` SKILL.md's LEGACY subsection under "The shaping session's remaining duties".)
 - **Dupe guard (`-i <issue>`, fail-closed, `--force` to override):** before doing any work, refuses to dispatch
   if the target issue already has an **open PR** referencing it, or an **in-flight branch** (`change/<issue>-*`
   or `cloud-ship/<issue>-*`) already exists on origin. This closes a real incident (#22): an agent ran both an

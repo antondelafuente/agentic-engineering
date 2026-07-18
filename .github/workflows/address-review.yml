@@ -88,6 +88,84 @@ jobs:
           echo "head_ref=$(echo "$pr_json" | jq -r '.headRefName')" >> "$GITHUB_OUTPUT"
           echo "base_ref=$(echo "$pr_json" | jq -r '.baseRefName')" >> "$GITHUB_OUTPUT"
 
+      # agentic-engineering#52: the PR-side counterpart of implement-on-ready.yml's issue-thread filter.
+      # `address-review.md` previously told the agent to fetch the PR's reviews and full comment thread
+      # itself via live `gh api` calls — on a public repo, anyone can leave a review or comment on an open
+      # PR, so that thread could carry non-allowlisted content into what the agent treats as review
+      # findings. Snapshot and filter it here instead: only reviews from the codex engineer bot (the sole
+      # identity that ever submits a genuine review in this pipeline) and comments from the researcher or
+      # the claude engineer bot itself (its own prior responses) are kept — everything else is dropped and
+      # logged (audit evidence in the run log), never reaching the model. Same allowlists review-on-pr.yml
+      # already established for this exact purpose (automated-researcher#389).
+      - name: Fetch + filter PR thread
+        id: pr_thread
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          REVIEW_ALLOW='["codex-engineer[bot]"]'
+          COMMENT_ALLOW='["antondelafuente","claude-code-engineer[bot]"]'
+
+          reviews_json=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s 'add // []')
+          comments_json=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s 'add // []')
+
+          # jq can't source canonical-login.sh's bash function, so the same "app/<slug>" -> "<slug>[bot]"
+          # remap is duplicated here as a jq def (mirrors review-on-pr.yml's own canon_login jq def).
+          kept_reviews=$(jq --argjson allow "$REVIEW_ALLOW" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            map(select((.body // "") != "" and ((.user.login | canon_login) as $c | ($allow | index($c)) != null)))
+          ' <<<"$reviews_json")
+          kept_comments=$(jq --argjson allow "$COMMENT_ALLOW" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            map(select((.user.login | canon_login) as $c | ($allow | index($c)) != null))
+          ' <<<"$comments_json")
+          dropped=$(jq -n --argjson rallow "$REVIEW_ALLOW" --argjson callow "$COMMENT_ALLOW" --argjson r "$reviews_json" --argjson c "$comments_json" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            [($r[] | select((.user.login|canon_login) as $x | ($rallow|index($x))==null) | {id, kind:"review", author:.user.login}),
+             ($c[] | select((.user.login|canon_login) as $x | ($callow|index($x))==null) | {id, kind:"comment", author:.user.login})]
+          ')
+
+          reviews_total=$(jq 'length' <<<"$reviews_json")
+          comments_total=$(jq 'length' <<<"$comments_json")
+          kept_reviews_count=$(jq 'length' <<<"$kept_reviews")
+          kept_comments_count=$(jq 'length' <<<"$kept_comments")
+          dropped_count=$(jq 'length' <<<"$dropped")
+
+          echo "::notice::PR #$PR_NUMBER thread snapshot: $kept_reviews_count/$reviews_total review(s) and $kept_comments_count/$comments_total comment(s) kept (allowlisted authors); $dropped_count dropped: $(jq -c . <<<"$dropped")"
+
+          combined=$(jq -n --argjson r "$kept_reviews" --argjson c "$kept_comments" '
+            ($r | map({ts: .submitted_at, kind: "review", user: .user.login, state, body})) +
+            ($c | map({ts: .created_at, kind: "comment", user: .user.login, state: null, body}))
+            | sort_by(.ts)
+          ')
+          rendered=$(jq -r '
+            .[] | (if .kind == "review" then "### Review (" + .state + ") by " + .user + " at " + .ts
+                   else "### Comment by " + .user + " at " + .ts end)
+              + "\n" + (.body // "") + "\n"
+          ' <<<"$combined")
+
+          kept_total=$((kept_reviews_count + kept_comments_count))
+          if [ "$kept_total" -gt 0 ]; then
+            thread="Reviews and comments from allowlisted authors ($kept_reviews_count of $reviews_total review(s), $kept_comments_count of $comments_total comment(s); $dropped_count non-allowlisted entries omitted and logged in the workflow run, never seen by you):
+
+          $rendered"
+          else
+            thread="No reviews or comments from allowlisted authors were found ($reviews_total review(s), $comments_total comment(s) total; any non-allowlisted entries were omitted and logged in the workflow run)."
+          fi
+
+          # $thread embeds review/comment bodies verbatim, so a fixed delimiter could be matched by a body
+          # line and used to inject extra keys into $GITHUB_OUTPUT (same risk class already fixed for
+          # $COMMENT_BODY below and for review-on-pr.yml's HISTORY_RENDERED) — a per-run random delimiter
+          # closes it off.
+          delim="thread_$(openssl rand -hex 20)"
+          {
+            echo "thread<<$delim"
+            printf '%s\n' "$thread"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Render address-review prompt
         id: render_prompt
         env:
@@ -97,6 +175,7 @@ jobs:
           BASE_REF: ${{ steps.resolve_pr.outputs.base_ref }}
           COMMENT_URL: ${{ github.event.comment.html_url }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          PR_THREAD: ${{ steps.pr_thread.outputs.thread }}
         run: |
           set -euo pipefail
           body="$(cat .github/prompts/address-review.md)"
@@ -106,6 +185,7 @@ jobs:
           body="${body//\{\{BASE_REF\}\}/$BASE_REF}"
           body="${body//\{\{COMMENT_URL\}\}/$COMMENT_URL}"
           body="${body//\{\{COMMENT_BODY\}\}/$COMMENT_BODY}"
+          body="${body//\{\{PR_THREAD\}\}/$PR_THREAD}"
 
           # code-review finding (PR #44 round 2, MED): $body embeds COMMENT_BODY verbatim -- the
           # triggering comment's own raw text, from an ALLOWLISTED author but not otherwise trusted

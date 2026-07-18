@@ -64,23 +64,29 @@ open(p, "w", encoding="utf-8").write(text)
 PY
 expect FAIL round3-wf-issue-edit "$R3" "pass1:.*wf.sh issue ... edit"
 
-# 3. PR #51 round-8-style regression: cloud-ship frontmatter still asserts an unqualified cloud-ship
-#    preference (already true of the real doc) while the body newly asserts pipeline-first subordination
-#    (the regression: the two now disagree) — pass 3.
+# 3. PR #51 round-8-style regression: an unqualified cloud-ship preference claim and a pipeline-first
+#    subordination claim both injected (self-contained — post-#51 main no longer carries an ambient
+#    unqualified claim on its own) so the two disagree — pass 3.
 R8=$(fixture round8)
 SC8="$R8/plugins/aar-engineering/skills/ship-change/SKILL.md"
 python3 - "$SC8" <<'PY'
 import sys
 p = sys.argv[1]
 text = open(p, encoding="utf-8").read()
+heading = "# ship-change — the GitHub-backed scaffold-change lifecycle\n"
+assert heading in text, "fixture setup: expected ship-change SKILL.md top heading not found"
+unqualified = (
+    "\nAuthors should prefer the sibling `cloud-ship` skill for every repo-self-contained change.\n"
+)
+text = text.replace(heading, heading + unqualified, 1)
 marker = "## The non-negotiable properties"
 assert marker in text, "fixture setup: expected ship-change SKILL.md section not found"
-injected = (
+subordinate = (
     "## Routing (fixture)\n\n"
     "On a pipeline-enabled repo, the `cloud-ship` skill is for repo-self-contained changes on "
     "non-pipeline repos, ranked behind the pipeline.\n\n"
 )
-text = text.replace(marker, injected + marker, 1)
+text = text.replace(marker, subordinate + marker, 1)
 open(p, "w", encoding="utf-8").write(text)
 PY
 expect FAIL round8-contradictory-frontmatter "$R8" "pass3:.*unqualified cloud-ship preference"

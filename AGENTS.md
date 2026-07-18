@@ -78,7 +78,13 @@ itself, ships by labeling an Issue `ready`.
     `codex-engineer[bot]` / `app/codex-engineer` — the researcher plus the two engineer bots, both GitHub
     login representations each (`canonical-login.sh` normalizes between them). An Issue or comment from
     anyone else never reaches a privileged step, and the coarse job-level `if:` pre-filter is backed by a
-    fresh re-verification against live state before any token is minted.
+    fresh re-verification against live state before any token is minted. The same allowlist also gates
+    *content*, not just triggering: `implement-on-ready.yml` and `address-review.yml` each snapshot and
+    filter the issue/PR comment thread (and, for `address-review.yml`, the PR's reviews) to allowlisted
+    authors only before rendering the implementor's prompt, dropping and logging anything else
+    (agentic-engineering#52) — a non-allowlisted account's comment or review never becomes part of what the
+    model treats as spec, even if it's technically readable via the model's own `gh`/API access during the
+    run.
   - **Accepted residual risk, re-justified for public:** the implementor agent executes repo-controlled code
     (tests, hooks) while holding its API key and a short-lived write-scoped GitHub token. The allowlist
     predicate above is what makes this acceptable on a *public* repo: it ensures only allowlisted-authored
