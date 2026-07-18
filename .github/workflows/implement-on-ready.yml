@@ -104,20 +104,91 @@ jobs:
 
           echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
 
+      # agentic-engineering#52: snapshot the issue thread HERE, at dispatch time, instead of letting the
+      # implementor agent fetch it live later from its own Bash tool call. On a public repo, any account
+      # can comment on a `ready` issue — including racing a comment in between the label flip and this run
+      # starting — and the agent's own `gh issue view --comments` would have pulled that comment in
+      # unfiltered as "spec". Only the issue body plus comments authored by an ALLOWLISTED identity are
+      # kept; everything else is dropped and logged below (visible in the run log as audit evidence) and
+      # never reaches the model at all.
+      - name: Fetch + filter issue thread
+        id: issue_thread
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ steps.resolve_issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          # jq can't source canonical-login.sh's bash function, so the same "app/<slug>" -> "<slug>[bot]"
+          # remap is duplicated here as a jq def (same approach already used by review-on-pr.yml's own
+          # allowlist-filtered history fetch, automated-researcher#389).
+          allow_json=$(printf '%s\n' $ALLOWLIST | jq -R . | jq -s .)
+
+          issue_body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""')
+          comments_json=$(gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" --paginate | jq -s 'add // []')
+
+          kept=$(jq --argjson allow "$allow_json" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            map(select((.user.login | canon_login) as $c | ($allow | index($c)) != null))
+          ' <<<"$comments_json")
+          dropped_ids=$(jq --argjson allow "$allow_json" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            [.[] | select((.user.login | canon_login) as $c | ($allow | index($c)) | not) | {id, author: .user.login}]
+          ' <<<"$comments_json")
+
+          total=$(jq 'length' <<<"$comments_json")
+          kept_count=$(jq 'length' <<<"$kept")
+          dropped_count=$(jq 'length' <<<"$dropped_ids")
+
+          echo "::notice::issue #$ISSUE_NUMBER thread snapshot: $kept_count/$total comment(s) kept (allowlisted authors); $dropped_count dropped: $(jq -c . <<<"$dropped_ids")"
+
+          rendered=$(jq -r '.[] | "### Comment by " + .user.login + " (id " + (.id|tostring) + ", " + .created_at + ")\n" + (.body // "") + "\n"' <<<"$kept")
+
+          thread="Issue body:
+          $issue_body"
+          if [ "$kept_count" -gt 0 ]; then
+            thread="$thread
+
+          Comments from allowlisted authors ($kept_count of $total total comment(s) on this issue; $dropped_count non-allowlisted comment(s) omitted and logged in the workflow run, never seen by you):
+
+          $rendered"
+          else
+            thread="$thread
+
+          No comments from allowlisted authors ($total total comment(s) on this issue, all omitted as non-allowlisted and logged in the workflow run)."
+          fi
+
+          # $thread embeds the issue body and comment bodies verbatim, so a fixed delimiter could be
+          # matched by a line inside them and used to inject extra keys into $GITHUB_OUTPUT (same class of
+          # risk already fixed elsewhere in this pipeline, e.g. address-review.yml's COMMENT_BODY and
+          # review-on-pr.yml's HISTORY_RENDERED) — a per-run random delimiter closes it off.
+          delim="thread_$(openssl rand -hex 20)"
+          {
+            echo "thread<<$delim"
+            printf '%s\n' "$thread"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Render implementor prompt
         id: render_prompt
         env:
           ISSUE_NUMBER: ${{ steps.resolve_issue.outputs.issue_number }}
           REPO: ${{ github.repository }}
+          ISSUE_THREAD: ${{ steps.issue_thread.outputs.thread }}
         run: |
           set -euo pipefail
           body="$(cat .github/prompts/implement.md)"
           body="${body//\{\{ISSUE_NUMBER\}\}/$ISSUE_NUMBER}"
           body="${body//\{\{REPO\}\}/$REPO}"
+          body="${body//\{\{ISSUE_THREAD\}\}/$ISSUE_THREAD}"
+
+          # $body now embeds the (already-filtered) issue thread verbatim, so the same fixed-delimiter
+          # risk applies here as in the step above — a per-run random delimiter closes it off.
+          delim="prompt_$(openssl rand -hex 20)"
           {
-            echo "prompt<<PROMPT_EOF"
-            echo "$body"
-            echo "PROMPT_EOF"
+            echo "prompt<<$delim"
+            printf '%s\n' "$body"
+            echo "$delim"
           } >> "$GITHUB_OUTPUT"
 
       - name: Mint claude engineer App token
