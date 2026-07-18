@@ -17,7 +17,7 @@ surface, and are small enough to bundle as one change:
   PASS record that `close-cloud-ship.sh` would have happily merged as a duplicate had anyone run `close` on it.
   Nothing at dispatch time checks whether the target issue already has an open PR or an in-flight branch.
 - **#25 — silent-stall / attach hazard.** Two independent agents were burned attaching to a *running* cloud
-  session to check progress: a `claude --teleport` into a healthy run wedged it, and a `codex` AAR attaching to
+  session to check progress: a `claude --teleport` into a healthy run wedged it, and a `codex` agent attaching to
   a stalled run hit a misleading branch-checkout error (the branch was never pushed) and misread it as a crash.
   `SKILL.md` says nothing about expected latency, that attach/teleport/resume are TAKEOVER operations (not
   viewers), or what to do on a suspected stall.
@@ -69,7 +69,7 @@ section:
   pushed nothing, so nothing is lost) or fall back to on-box `ship-change`. Teleport is safe only on a
   **finished/abandoned** session, for post-mortem readback (it materializes the transcript as a local jsonl).
 - One sentence naming both 2026-07-02 incidents that motivated this section (a `claude --teleport` into a
-  healthy running session wedging it; a `codex` AAR attaching to a stalled session and misreading the resulting
+  healthy running session wedging it; a `codex` agent attaching to a stalled session and misreading the resulting
   branch-checkout error as a crash).
 
 **Version + record.** Bump `aar-engineering`'s `plugin.json` version (patch bump: three small, backward

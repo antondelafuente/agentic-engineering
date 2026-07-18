@@ -62,7 +62,7 @@ esac
 RUNNER_FAMILY=${AAR_SUBSTRATE:-claude}
 if [ "$AUDITOR_FAMILY" = "$RUNNER_FAMILY" ]; then
   echo "BLOCKED: cross-family audit required — auditor family ($AUDITOR_FAMILY) == experiment runner" >&2
-  echo "  family ($RUNNER_FAMILY). Set AUDIT_VERIFIER_CMD to a DIFFERENT family (e.g. on a Codex AAR:" >&2
+  echo "  family ($RUNNER_FAMILY). Set AUDIT_VERIFIER_CMD to a DIFFERENT family (e.g. on a Codex agent:" >&2
   echo "  AUDIT_VERIFIER_CMD='claude -p ...'), or correct AAR_SUBSTRATE if mis-set." >&2
   exit 1
 fi
@@ -132,7 +132,7 @@ material finding' for it — do NOT invent issues. False findings destroy this t
    split, the interface/contract cut at the right place — or 'gated around the wrong unit')?
 2. DRY / CANONICAL HOME — does a home for this ALREADY exist? Is it duplicating logic/config/prose, or
    adding a new thing where EXTENDING an existing helper/skill/mode is the real fix?
-3. BLAST RADIUS / DEPENDENTS — who depends on the touched files (every AAR? a live experiment? other
+3. BLAST RADIUS / DEPENDENTS — who depends on the touched files (every agent? a live experiment? other
    skills/plugins)? Is it safe for in-flight work; does it need a migration / restart / back-compat shim
    the proposal omits?
 4. REVERSIBILITY — how hard to undo if wrong? Anything one-way (deleting a canonical artifact, a convention
