@@ -333,31 +333,63 @@ note(f"pass4: checked {len(phrases)} retired phrase(s) against {len(docs)} file(
 # ---------------------------------------------------------------------------
 # Pass 5 — prohibited-op grep: a fenced-block ambient `gh` WRITE prescription (hard-fail)
 # ---------------------------------------------------------------------------
-ISSUE_WRITE_VERBS = {"create", "edit", "close", "delete", "lock", "reopen", "transfer", "pin", "unpin"}
-PR_WRITE_VERBS = {
-    "create", "edit", "close", "delete", "lock", "merge", "reopen", "ready", "review", "comment",
-    "update-branch",
+# WRITE_VERBS is mirrored from gh-guard.sh (plugins/aar-engineering/skills/ship-change/scripts/gh-guard.sh,
+# the `issue|pr` case arm) — the runtime guard is the source of truth this doc-time pass exists to match.
+# Applied to BOTH nouns rather than kept as two hand-curated lists: a verb inapplicable to one noun never
+# appears in a real doc, so over-inclusion costs nothing, and the diverging-lists defect class disappears.
+# Update BOTH together when gh-guard.sh's issue|pr write classification changes.
+WRITE_VERBS = {
+    "create", "comment", "edit", "close", "reopen", "delete", "merge", "review", "ready",
+    "lock", "unlock", "pin", "unpin", "transfer", "develop", "update-branch",
 }
 NEGATION_RE = re.compile(r"\b(never|not|don'?t|avoid|no bare|against|prohibited|forbidden)\b", re.I)
 RESEARCHER_RE = re.compile(r"researcher", re.I)
 GH_WRITE_RE = re.compile(r"\bgh\s+(issue|pr)\s+([a-z][a-z-]*)", re.I)
 
+# `gh api`: mirrors gh-guard.sh's own default-deny for the `api` subcommand — a write is any non-GET/HEAD
+# method or any body-implying field flag; a bare `gh api <path>` with neither defaults to GET and is a read.
+GH_API_RE = re.compile(r"\bgh\s+api\b.*", re.I)
+GH_API_METHOD_RE = re.compile(r"(?:^|\s)-X\s*(\S+)|(?:^|\s)--method[=\s]+(\S+)", re.I)
+GH_API_BODY_RE = re.compile(r"(?:^|\s)(-f|-F|--field|--raw-field|--input)(?:[=\s]|$)")
+
 
 def fenced_blocks(text):
+    # CommonMark fence grammar: a fence OPENS on a line with up to 3 leading spaces then a run of >=3
+    # backticks or tildes (an info string may follow); it CLOSES only on a later line with the SAME fence
+    # character, a run >= the opening length, and nothing but whitespace after. An unclosed run extends to
+    # EOF. This (rather than a blind ``` toggle) covers tilde fences and nested longer-backtick fences.
     spans = []
     offset = 0
     open_at = None
+    fence_char = None
+    fence_len = 0
     for line in text.split("\n"):
-        if line.strip().startswith("```"):
-            if open_at is None:
-                open_at = offset
-            else:
-                spans.append((open_at, offset + len(line)))
+        line_len = len(line)
+        if open_at is None:
+            m = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
+            if m:
+                fence_char, fence_len, open_at = m.group(1)[0], len(m.group(1)), offset
+        else:
+            m = re.match(r'^ {0,3}(' + re.escape(fence_char) + r'{3,})\s*$', line)
+            if m and len(m.group(1)) >= fence_len:
+                spans.append((open_at, offset + line_len))
                 open_at = None
-        offset += len(line) + 1
+        offset += line_len + 1
     if open_at is not None:
         spans.append((open_at, len(text)))
     return spans
+
+
+def escaped(text, spans, fstart, abs_pos):
+    if in_spans(abs_pos, spans):
+        return True
+    preceding = text[max(fstart, abs_pos - 60): abs_pos]
+    if NEGATION_RE.search(preceding):
+        return True
+    researcher_window = text[max(fstart, abs_pos - 200): abs_pos]
+    if RESEARCHER_RE.search(researcher_window):
+        return True
+    return False
 
 
 pass5_checked = 0
@@ -369,25 +401,34 @@ for path, text in docs.items():
         for m in GH_WRITE_RE.finditer(block):
             pass5_checked += 1
             noun, verb = m.group(1).lower(), m.group(2).lower()
-            verbs = ISSUE_WRITE_VERBS if noun == "issue" else PR_WRITE_VERBS
-            if verb not in verbs:
+            if verb not in WRITE_VERBS:
                 continue
             abs_pos = fstart + m.start()
-            if in_spans(abs_pos, spans):
-                continue
-            preceding = text[max(fstart, abs_pos - 60): abs_pos]
-            if NEGATION_RE.search(preceding):
-                continue
-            researcher_window = text[max(fstart, abs_pos - 200): abs_pos]
-            if RESEARCHER_RE.search(researcher_window):
+            if escaped(text, spans, fstart, abs_pos):
                 continue
             line_no = text.count("\n", 0, abs_pos) + 1
             err(
                 f"pass5: {rel}:{line_no}: fenced block prescribes ambient 'gh {noun} {verb}' (a WRITE op) "
                 f"outside a researcher-action or legacy-marked context"
             )
+        for m in GH_API_RE.finditer(block):
+            pass5_checked += 1
+            line = m.group(0)
+            method_m = GH_API_METHOD_RE.search(line)
+            method = (method_m.group(1) or method_m.group(2)).upper() if method_m else "GET"
+            has_body = bool(GH_API_BODY_RE.search(line))
+            if method in ("GET", "HEAD") and not has_body:
+                continue
+            abs_pos = fstart + m.start()
+            if escaped(text, spans, fstart, abs_pos):
+                continue
+            line_no = text.count("\n", 0, abs_pos) + 1
+            err(
+                f"pass5: {rel}:{line_no}: fenced block prescribes an ambient 'gh api' WRITE "
+                f"(method={method}, body={has_body}) outside a researcher-action or legacy-marked context"
+            )
 
-note(f"pass5: checked {pass5_checked} fenced 'gh issue|pr' mention(s)")
+note(f"pass5: checked {pass5_checked} fenced 'gh issue|pr|api' mention(s)")
 
 print("[skill-consistency] " + ("FAIL" if fail else "PASS"), file=sys.stderr)
 sys.exit(1 if fail else 0)

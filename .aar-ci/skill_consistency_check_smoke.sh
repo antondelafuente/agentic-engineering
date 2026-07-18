@@ -111,4 +111,29 @@ printf '\n<!-- ROUTING:fixture-concern -->\nThis paragraph states the fixture ro
 printf '\n<!-- ROUTING:fixture-concern -->\nA second canonical statement of the fixture routing concern, which should only WARN.\n<!-- ROUTING-END:fixture-concern -->\n' >> "$CS2"
 expect PASS pass2-duplicate-anchor-flags-not-fails "$P2" "pass2: routing concern 'fixture-concern' has 2 canonical anchors"
 
+# 7. Prohibited-op grep: fenced `gh issue comment` (WRITE_VERBS is now one set shared by issue/pr,
+#    mirrored from gh-guard.sh) outside any researcher/legacy escape — pass 5.
+P7=$(fixture pass7)
+VC7="$P7/plugins/verify-claims/skills/verify-claims/SKILL.md"
+printf '\n```\ngh issue comment 123 -b "..."\n```\n' >> "$VC7"
+expect FAIL pass5-fenced-gh-issue-comment "$P7" "pass5:.*ambient 'gh issue comment'"
+
+# 8. Same prescription, but inside a tilde fence — the CommonMark-correct fence parser must still catch it.
+P8=$(fixture pass8)
+VC8="$P8/plugins/verify-claims/skills/verify-claims/SKILL.md"
+printf '\n~~~\ngh issue comment 123 -b "..."\n~~~\n' >> "$VC8"
+expect FAIL pass5-tilde-fenced-gh-issue-comment "$P8" "pass5:.*ambient 'gh issue comment'"
+
+# 9. `gh api` write hole: a fenced `gh api` call carrying a body-implying field flag — pass 5.
+P9=$(fixture pass9)
+VC9="$P9/plugins/verify-claims/skills/verify-claims/SKILL.md"
+printf '\n```\ngh api -f title="..." repos/owner/repo/issues\n```\n' >> "$VC9"
+expect FAIL pass5-fenced-gh-api-write "$P9" "pass5:.*ambient 'gh api' WRITE"
+
+# 10. Bare `gh api` with no method/body flag defaults to GET and must still pass — no false positive.
+P10=$(fixture pass10)
+VC10="$P10/plugins/verify-claims/skills/verify-claims/SKILL.md"
+printf '\n```\ngh api repos/owner/repo/issues\n```\n' >> "$VC10"
+expect PASS pass5-fenced-gh-api-read "$P10"
+
 [ "$fails" = 0 ] && { echo "[skill_consistency_check_smoke] PASS"; exit 0; } || { echo "[skill_consistency_check_smoke] FAIL"; exit 1; }
