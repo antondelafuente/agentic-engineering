@@ -25,11 +25,13 @@ this ships a change to the *product itself*. It belongs to the **SWE pipeline** 
 section — that's the one authoritative signal. The repo's `ready` label existing is corroborating only,
 never the decider.
 
+<!-- ROUTING:pipeline-first -->
 **The routing rule** (stated once — every other mention of routing below points here rather than restating
 it): On a pipeline-enabled repo, ship via the SWE pipeline — unless the change meets a named can't-take
 criterion (box-local state/secrets; coordinated multi-repo atomic change; instance-only config outside any
 repo), in which case use the on-box lifecycle and record which criterion applied in the issue/PR body.
 cloud-ship is for repo-self-contained changes on repos WITHOUT the pipeline.
+<!-- ROUTING-END:pipeline-first -->
 
 **Pipeline-enabled repos — this is the DEFAULT shipping flow, not the lifecycle below** (the routing rule
 above):

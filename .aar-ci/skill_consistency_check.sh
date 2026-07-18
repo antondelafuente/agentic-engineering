@@ -69,7 +69,7 @@ LEGACY_START = "<!-- LEGACY:START -->"
 LEGACY_END = "<!-- LEGACY:END -->"
 
 
-def legacy_spans(text):
+def legacy_spans(text, rel):
     spans = []
     pos = 0
     while True:
@@ -78,7 +78,8 @@ def legacy_spans(text):
             break
         e = text.find(LEGACY_END, s)
         if e == -1:
-            spans.append((s, len(text)))
+            err(f"legacy: {rel}: unmatched <!-- LEGACY:START --> at offset {s} with no matching "
+                "<!-- LEGACY:END --> — fails closed (no legacy carve-out for the rest of the file)")
             break
         spans.append((s, e + len(LEGACY_END)))
         pos = e + len(LEGACY_END)
@@ -113,7 +114,21 @@ if os.path.isfile(WF_PATH):
     wf_text = open(WF_PATH, encoding="utf-8").read()
     # Top-level case labels sit at column 0 inside `case "$CMD" in ... esac`; nested case blocks (the
     # issue/fdispo sub-dispatch) are indented, so a column-0 anchor safely extracts only the real verbs.
-    for m in re.finditer(r'^([A-Za-z][A-Za-z0-9_-]*(?:\|[A-Za-z0-9_-]+)*)\)', wf_text, re.M):
+    # A verb retired down to a bare `die "... retired ..."` body (e.g. `classify`, #248) is excluded —
+    # inspecting the arm's first non-comment statement keeps this self-maintaining for future retirements.
+    RETIRED_DIE_RE = re.compile(r'^die\s+"[^"]*retired')
+    verb_matches = list(re.finditer(r'^([A-Za-z][A-Za-z0-9_-]*(?:\|[A-Za-z0-9_-]+)*)\)', wf_text, re.M))
+    for i, m in enumerate(verb_matches):
+        body_end = verb_matches[i + 1].start() if i + 1 < len(verb_matches) else len(wf_text)
+        first_stmt = None
+        for line in wf_text[m.end():body_end].split('\n'):
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            first_stmt = stripped
+            break
+        if first_stmt and RETIRED_DIE_RE.match(first_stmt):
+            continue
         top_verbs.update(m.group(1).split('|'))
     m = re.search(
         r"only '([a-zA-Z_-]+)', '([a-zA-Z_-]+)', '([a-zA-Z_-]+)', '([a-zA-Z_-]+)', '([a-zA-Z_-]+)' are allowed",
@@ -292,10 +307,12 @@ if os.path.isfile(DENYLIST_PATH):
 else:
     err(f"pass4: retired-phrase denylist not found at {relpath(DENYLIST_PATH)}")
 
+legacy_spans_by_path = {path: legacy_spans(text, relpath(path)) for path, text in docs.items()}
+
 pass4_hits = 0
 for path, text in docs.items():
     rel = relpath(path)
-    spans = legacy_spans(text)
+    spans = legacy_spans_by_path[path]
     lower = text.lower()
     for phrase in phrases:
         plower = phrase.lower()
@@ -338,13 +355,15 @@ def fenced_blocks(text):
                 spans.append((open_at, offset + len(line)))
                 open_at = None
         offset += len(line) + 1
+    if open_at is not None:
+        spans.append((open_at, len(text)))
     return spans
 
 
 pass5_checked = 0
 for path, text in docs.items():
     rel = relpath(path)
-    spans = legacy_spans(text)
+    spans = legacy_spans_by_path[path]
     for fstart, fend in fenced_blocks(text):
         block = text[fstart:fend]
         for m in GH_WRITE_RE.finditer(block):
