@@ -161,43 +161,12 @@ If a plugin manifest changed, after a revert/merge refresh installed plugins:
 ## Self-hosting
 
 agentic-engineering ships its own changes through this `ship-change` (self-hosted). From Phase 2 on, its `main`
-is branch-protected like any product repo. Minimal setup checklist to self-host this pipeline on a repo,
-derived from what `.github/workflows/{implement-on-ready,review-on-pr,address-review,checks}.yml` each
-actually reference:
-
-1. **Copy the pipeline assets** into the target repo: the four workflow files (`implement-on-ready.yml`,
-   `review-on-pr.yml`, `address-review.yml`, `checks.yml`); the two prompts they render
-   (`.github/prompts/implement.md`, `.github/prompts/address-review.md`); the shared
-   `.github/scripts/canonical-login.sh` helper both `implement-on-ready.yml` and `address-review.yml`
-   source; the `.aar-ci/` check scripts (`checks.sh`, `fake_home_smoke.sh`, `checks_marketplace_smoke.sh`,
-   `skill_consistency_check.sh`, `skill_consistency_check_smoke.sh` — plus the `RETIRED_PHRASES.txt`
-   denylist under `plugins/aar-engineering/` that `checks.yml` pins to base alongside them); and an
-   `AGENTS.md` carrying the `CODEX-REVIEW-GUIDANCE:BEGIN/END` block — `review-on-pr.yml` reads the severity
-   convention from the PR's **base**-ref `AGENTS.md`, so without that block the review leg has no criteria.
-2. **Edit the hard-coded account allowlists**: `implement-on-ready.yml`'s `ALLOWLIST` env var and job-level
-   `if:`, and `address-review.yml`'s job-level `if:`, each name the researcher account
-   (`antondelafuente`) explicitly — a deliberate spoof-resistance choice (a compromised in-repo config file
-   must not be able to widen who can trigger a privileged run) rather than something sourced from repo
-   config. Replace it with your own login in both files, or a fresh install silently ignores its owner.
-3. **Create the `ready`, `needs-human`, and `needs-dispatcher` labels** in the repo. GitHub labels must
-   already exist before they can be applied via the API, and the pipeline never creates them:
-   `implement-on-ready.yml` triggers on an issue's `ready` label, `review-on-pr.yml`'s round-limit
-   escalation applies `needs-human`, and the implementor/address-review prompts apply `needs-dispatcher`
-   when blocked.
-4. **Install two GitHub Apps** on the repo: `claude-code-engineer` (author/implementor identity) and
-   `codex-engineer` (reviewer identity) — see "Engineer identities (as-built)" above for the permissions
-   each needs.
-5. **Provision the six Actions secrets**: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_APP_ID`,
-   `CLAUDE_APP_PRIVATE_KEY`, `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`. The four App ID/private-key secrets
-   fail loudly at token-mint (the `create-github-app-token` step in `implement-on-ready.yml`,
-   `review-on-pr.yml`'s `submit-verdict` job, and `address-review.yml`) if missing. `ANTHROPIC_API_KEY` and
-   `OPENAI_API_KEY` are consumed later instead, by the steps that actually run a model: the pinned Claude
-   CLI invocation in `implement-on-ready.yml`/`address-review.yml` and the smoke `.aar-ci/checks.sh` runs in
-   `checks.yml` consume `ANTHROPIC_API_KEY`, while `review-on-pr.yml`'s `openai/codex-action` step consumes
-   `OPENAI_API_KEY` — those two fail at that later step, not at token-mint.
-6. **Set branch protection on `main`** to require the `checks` status (from `checks.yml`) plus
-   `codex-engineer`'s native review as the required approving review — via the owner-token maintenance
-   path (`WF_GH_ALLOW_OWNER_WRITE=1`), since an engineer-bot App token cannot modify branch protection on
-   itself. See "What's enforced (as-built)" above for the full rule set.
-7. **Read `AGENTS.md`'s "GitHub-native SWE pipeline" section** for the trust model this setup relies on
-   (allowlisted actors, fork-PR isolation, the accepted residual risk on a public repo).
+is branch-protected like any product repo. Self-hosting this pipeline on another repo takes more than
+installing the skills: the target repo also needs the pipeline's workflow assets and prompts copied in;
+the identity substitutions the workflows hard-code throughout (the allowlisted researcher account, the
+engineer Apps' slugs, and the git author used for commits) replaced with the new owner's own; the `ready`
+and `needs-human` labels created; two GitHub Apps installed with the documented permissions; the six Actions
+secrets provisioned; and branch protection on `main` set up alongside the repository's "Allow auto-merge"
+setting. A complete, tested install path for all of this is tracked in
+[agentic-engineering#61](https://github.com/antondelafuente/agentic-engineering/issues/61); until it lands,
+treat this repository's own configuration as the reference implementation.
