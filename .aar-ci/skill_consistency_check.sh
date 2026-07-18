@@ -333,6 +333,12 @@ note(f"pass4: checked {len(phrases)} retired phrase(s) against {len(docs)} file(
 # ---------------------------------------------------------------------------
 # Pass 5 — prohibited-op grep: a fenced-block ambient `gh` WRITE prescription (hard-fail)
 # ---------------------------------------------------------------------------
+# THREAT MODEL: pass 5 is doc-time defense-in-depth that mirrors gh-guard.sh's write classification for
+# prescriptions AS HONESTLY WRITTEN in these docs; adversarial obfuscation (command indirection, variable
+# expansion, heredocs, alias tricks) is explicitly OUT OF SCOPE here — the runtime guard (gh-guard.sh) is
+# the enforcement boundary that owns evasion. Future reviews should treat further evasion-form findings
+# against this pass as out of its declared scope.
+#
 # WRITE_VERBS is mirrored from gh-guard.sh (plugins/aar-engineering/skills/ship-change/scripts/gh-guard.sh,
 # the `issue|pr` case arm) — the runtime guard is the source of truth this doc-time pass exists to match.
 # Applied to BOTH nouns rather than kept as two hand-curated lists: a verb inapplicable to one noun never
@@ -350,7 +356,44 @@ GH_WRITE_RE = re.compile(r"\bgh\s+(issue|pr)\s+([a-z][a-z-]*)", re.I)
 # method or any body-implying field flag; a bare `gh api <path>` with neither defaults to GET and is a read.
 GH_API_RE = re.compile(r"\bgh\s+api\b.*", re.I)
 GH_API_METHOD_RE = re.compile(r"(?:^|\s)-X\s*(\S+)|(?:^|\s)--method[=\s]+(\S+)", re.I)
-GH_API_BODY_RE = re.compile(r"(?:^|\s)(-f|-F|--field|--raw-field|--input)(?:[=\s]|$)")
+# gh-guard.sh:229-230 classifies ANY token starting with -f/-F as a body flag (its bash `-f*|-F*` arm), not
+# just the bare/`=`-joined forms — mirror that here so attached short flags like `-ftitle=x`/`-Fbody=@file`
+# are caught too.
+GH_API_BODY_RE = re.compile(
+    r"(?:^|\s)(-f\S*|-F\S*|--field(?:=\S*)?|--raw-field(?:=\S*)?|--input(?:=\S*)?)(?=\s|$)"
+)
+
+
+def strip_quotes(s):
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
+        return s[1:-1]
+    return s
+
+
+# Shell line-continuations: a fenced prescription may split one logical command across lines with a
+# trailing backslash (`gh issue \` + newline + indentation + `comment ...`). Collapse each such split to a
+# single space on a COPY used only for pass-5 regex matching, so `gh issue \<NL> comment` and `gh api ...
+# \<NL> --method POST` are visible to GH_WRITE_RE / GH_API_RE the same as an unsplit line would be. A
+# parallel index map recovers each normalized character's original offset, so escape-window lookback
+# (negation/researcher/legacy) and line-number reporting still point at the real, unnormalized text.
+CONTINUATION_RE = re.compile(r'\\\n[ \t]*')
+
+
+def normalize_continuations(text):
+    out = []
+    idx_map = []
+    i, n = 0, len(text)
+    while i < n:
+        m = CONTINUATION_RE.match(text, i)
+        if m:
+            out.append(' ')
+            idx_map.append(m.start())
+            i = m.end()
+        else:
+            out.append(text[i])
+            idx_map.append(i)
+            i += 1
+    return ''.join(out), idx_map
 
 
 def fenced_blocks(text):
@@ -398,12 +441,13 @@ for path, text in docs.items():
     spans = legacy_spans_by_path[path]
     for fstart, fend in fenced_blocks(text):
         block = text[fstart:fend]
-        for m in GH_WRITE_RE.finditer(block):
+        norm_block, idx_map = normalize_continuations(block)
+        for m in GH_WRITE_RE.finditer(norm_block):
             pass5_checked += 1
             noun, verb = m.group(1).lower(), m.group(2).lower()
             if verb not in WRITE_VERBS:
                 continue
-            abs_pos = fstart + m.start()
+            abs_pos = fstart + idx_map[m.start()]
             if escaped(text, spans, fstart, abs_pos):
                 continue
             line_no = text.count("\n", 0, abs_pos) + 1
@@ -411,15 +455,15 @@ for path, text in docs.items():
                 f"pass5: {rel}:{line_no}: fenced block prescribes ambient 'gh {noun} {verb}' (a WRITE op) "
                 f"outside a researcher-action or legacy-marked context"
             )
-        for m in GH_API_RE.finditer(block):
+        for m in GH_API_RE.finditer(norm_block):
             pass5_checked += 1
             line = m.group(0)
             method_m = GH_API_METHOD_RE.search(line)
-            method = (method_m.group(1) or method_m.group(2)).upper() if method_m else "GET"
+            method = strip_quotes(method_m.group(1) or method_m.group(2)).upper() if method_m else "GET"
             has_body = bool(GH_API_BODY_RE.search(line))
             if method in ("GET", "HEAD") and not has_body:
                 continue
-            abs_pos = fstart + m.start()
+            abs_pos = fstart + idx_map[m.start()]
             if escaped(text, spans, fstart, abs_pos):
                 continue
             line_no = text.count("\n", 0, abs_pos) + 1

@@ -136,4 +136,17 @@ VC10="$P10/plugins/verify-claims/skills/verify-claims/SKILL.md"
 printf '\n```\ngh api repos/owner/repo/issues\n```\n' >> "$VC10"
 expect PASS pass5-fenced-gh-api-read "$P10"
 
+# 11. A `gh issue comment` prescription split across a shell continuation line must still fail pass 5 —
+#     the continuation-normalization fix makes it visible to GH_WRITE_RE.
+P11=$(fixture pass11)
+VC11="$P11/plugins/verify-claims/skills/verify-claims/SKILL.md"
+printf '\n```\ngh issue \\\n  comment 123 -b "..."\n```\n' >> "$VC11"
+expect FAIL pass5-continuation-split-gh-issue-comment "$P11" "pass5:.*ambient 'gh issue comment'"
+
+# 12. A quoted read-only `--method "GET"` must still pass pass 5 — no false positive from the quotes.
+P12=$(fixture pass12)
+VC12="$P12/plugins/verify-claims/skills/verify-claims/SKILL.md"
+printf '\n```\ngh api --method "GET" repos/owner/repo/issues\n```\n' >> "$VC12"
+expect PASS pass5-quoted-get-method "$P12"
+
 [ "$fails" = 0 ] && { echo "[skill_consistency_check_smoke] PASS"; exit 0; } || { echo "[skill_consistency_check_smoke] FAIL"; exit 1; }
