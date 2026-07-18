@@ -32,14 +32,25 @@ repo), in which case use the on-box lifecycle and record which criterion applied
 cloud-ship is for repo-self-contained changes on repos WITHOUT the pipeline.
 
 **Pipeline-enabled repos — this is the DEFAULT shipping flow, not the lifecycle below** (the routing rule
-above). File a well-shaped Issue via the instance's engineer-bot token seam (`wf.sh issue <claude|codex>
-create -R <owner/repo> -t "..." -b "..."`, backed by `WF_ENGINEER_TOKEN_CMD_*`); ambient `gh` remains
-read-only. Body shape: Problem / Design / Non-goals / Acceptance — concrete enough for an implementor who
-cannot ask questions.
+above). One sequence, no unconditional create:
 
-**If a backlog issue already covers the change:** verify its body meets the design-in-description bar,
-update it if not (through the engineer-token seam), and stop — the researcher flips `ready` on THAT issue.
-Only file a new issue (`wf.sh issue <claude|codex> create` via the seam) when none exists.
+1. **Search first** for a backlog issue that already covers the change.
+2. **None found** → file a well-shaped Issue via the instance's engineer-bot token seam (`wf.sh issue
+   <claude|codex> create -R <owner/repo> -t "..." -b "..."`, backed by `WF_ENGINEER_TOKEN_CMD_*`); ambient
+   `gh` remains read-only. Body shape: Problem / Design / Non-goals / Acceptance — concrete enough for an
+   implementor who cannot ask questions.
+3. **Found** → pick exactly one, in this order of preference:
+   - (a) its body already meets the design-in-description bar (same shape as above) → stop, nothing to
+     write; the researcher flips `ready` on THAT issue.
+   - (b) it needs the shaped design → post the design as an issue comment through the engineer-token seam
+     (`wf.sh issue <claude|codex> comment <N> -R <owner/repo> -b "..."`), headed **"Design of record
+     (supersedes body)"**, and stop — the implementor reads the full thread before acting. Do not edit the
+     body: the engineer-token seam has no body-edit verb — only `create`, `comment`, `close`, `label`,
+     `dispose` (`wf.sh issue <fam> <verb> …`).
+   - (c) only if the researcher explicitly prefers a clean body → file a fresh shaped issue that references
+     the stale one, then close the stale one, both via the engineer-bot token seam (`wf.sh issue
+     <claude|codex> create -R <owner/repo> -t "..." -b "..."` referencing `#<N>`, then `wf.sh issue
+     <claude|codex> close <N> -R <owner/repo> -c "Superseded by #<new>" --duplicate-of <new>`).
 
 Then **STOP**. `ready` is applied by the researcher (a human), never self-applied by the agent — the label
 flip on an allowlisted repo IS the dispatch (`implement-on-ready.yml` picks it up automatically; `AGENTS.md`
