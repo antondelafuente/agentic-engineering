@@ -19,10 +19,9 @@ The repo is **public**, and branch protection on `main` is **active** with:
 - **Block force pushes + block deletions** on `main`.
 - **Include administrators (`enforce_admins`)** — **ON**. This is load-bearing: any ambient admin token used by
   the driver must still have an opposite-family approval to merge.
-
-NOT enabled (deliberately): **required status checks**. The `.aar-ci` checks + behavior smoke run *driver-side*
-in `finish` (before the approval), not as GitHub-reported statuses — so there's nothing for branch protection
-to require yet. Wiring the checks as a GitHub-required status is a tracked follow-up (needs a small GitHub Action).
+- **Require status checks** — the `checks` context (the `checks.yml` Action, which runs `.aar-ci/checks.sh`
+  on the PR's changed paths) is a **required** GitHub-reported status on `main`, in addition to the
+  `.aar-ci` checks + behavior smoke that already run driver-side in `finish` before the approval.
 
 ## Engineer identities (as-built)
 
@@ -158,11 +157,6 @@ git -C <repo> revert <merge-commit-sha>        # creates a revert commit
 
 If a plugin manifest changed, after a revert/merge refresh installed plugins:
 `claude plugin marketplace update <marketplace> && claude plugin update <name>@<marketplace>`.
-
-## Follow-ups (not yet built)
-
-- **`.aar-ci` checks as GitHub-required status checks** — a GitHub Action that runs the
-  checks and reports a status, so branch protection can require them (today they're driver-side only).
 
 ## Self-hosting
 
