@@ -38,13 +38,12 @@ File a well-shaped Issue via the instance's engineer-bot token seam (`wf.sh issu
 <owner/repo> -t "..." -b "..."`, backed by `WF_ENGINEER_TOKEN_CMD_*`); ambient `gh` remains read-only. Body
 shape: Problem / Design / Non-goals / Acceptance — concrete enough for an implementor who cannot ask
 questions. If a prior issue already covers the topic, the fresh issue links it (referencing
-`agentic-engineering#<N>`) rather than reusing it directly; the researcher may close the old one manually.
-(Reusing a covering issue directly becomes possible again once issue agentic-engineering#52, the
-comment-trust-boundary work, lands.)
+`<owner>/<repo>#<N>`) rather than reusing it directly; the researcher may close the old one manually.
+(Reusing a covering issue directly becomes possible again once issue
+antondelafuente/agentic-engineering#52, the comment-trust-boundary work, lands.)
 
-**Known exposure until agentic-engineering#52 lands:** the implementor currently consumes all issue comments
-as instructions; before flipping `ready`, the researcher should glance at the thread, and treat any post-flip
-comment from a non-allowlisted account as grounds to pull the label.
+Issue-thread comments from non-allowlisted accounts are filtered before reaching the implementor
+(antondelafuente/agentic-engineering#52); instructions come from the issue body and allowlisted comments only.
 
 Then **STOP**. `ready` is applied by the researcher (a human), never self-applied by the agent — the label
 flip on an allowlisted repo IS the dispatch (`implement-on-ready.yml` picks it up automatically; `AGENTS.md`
