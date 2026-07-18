@@ -39,16 +39,21 @@ above). One sequence, no unconditional create:
    <claude|codex> create -R <owner/repo> -t "..." -b "..."`, backed by `WF_ENGINEER_TOKEN_CMD_*`); ambient
    `gh` remains read-only. Body shape: Problem / Design / Non-goals / Acceptance — concrete enough for an
    implementor who cannot ask questions.
-3. **Found** → reuse the existing issue only when BOTH hold: its author is on the pipeline allowlist
-   (`AGENTS.md` "GitHub-native SWE pipeline", Authorization predicate) AND its body, as-written, already
-   meets the design-in-description bar (same shape as above). A comment never supplies or supersedes the
-   design — the implementor's spec is the body.
-   - **Both hold** → stop, nothing to write; the researcher flips `ready` on THAT issue.
-   - **Either fails** (author not allowlisted, or the body doesn't meet the bar) → file a fresh shaped issue
-     through the engineer-token seam (allowlisted by construction) that links the original (`wf.sh issue
-     <claude|codex> create -R <owner/repo> -t "..." -b "..."` referencing `#<N>`); leave the original OPEN
-     with a cross-link comment (`wf.sh issue <claude|codex> comment <N> -R <owner/repo> -b "..."` referencing
-     `#<new>`). Closing the original is optional and the researcher's call — never automatic.
+3. **Found** → reuse the existing issue only when ALL THREE hold: its author is on the pipeline allowlist
+   (`AGENTS.md` "GitHub-native SWE pipeline", Authorization predicate); its body, as-written, already meets
+   the design-in-description bar (same shape as above); AND the issue thread contains no comments from
+   non-allowlisted accounts (checkable by inspection before flipping `ready`). A comment never supplies or
+   supersedes the design — the implementor's spec is the body.
+   - **All three hold** → stop, nothing to write; the researcher flips `ready` on THAT issue.
+   - **Any fails** (author not allowlisted, the body doesn't meet the bar, or a non-allowlisted comment is
+     present) → file a fresh shaped issue through the engineer-token seam (allowlisted by construction) that
+     links the original (`wf.sh issue <claude|codex> create -R <owner/repo> -t "..." -b "..."` referencing
+     `#<N>`); leave the original OPEN with a cross-link comment (`wf.sh issue <claude|codex> comment <N> -R
+     <owner/repo> -b "..."` referencing `#<new>`). Closing the original is optional and the researcher's
+     call — never automatic.
+   - The underlying exposure this guards against — a privileged implementor consumes the full issue thread,
+     not just the body — is tracked as issue #52; this thread-condition gate is the doc-level mitigation
+     until that lands.
 
 Then **STOP**. `ready` is applied by the researcher (a human), never self-applied by the agent — the label
 flip on an allowlisted repo IS the dispatch (`implement-on-ready.yml` picks it up automatically; `AGENTS.md`
@@ -96,9 +101,10 @@ Actions pipeline does that (`AGENTS.md` "GitHub-native SWE pipeline"). What's le
    Escalation, or a review stall, on a **PR** → an allowlisted `@claude-code-engineer <guidance>` comment on
    that PR, which triggers `address-review.yml`. Scope is **clarification only** either way: a genuine design
    change means re-shaping the Issue, not steering the PR directly.
-3. **`update-branch` on THIS issue's pipeline PR**, when its base branch has gained a fix the PR needs — via
-   the instance's engineer-bot token seam (`WF_ENGINEER_TOKEN_CMD_*`); ambient `gh` remains read-only. This
-   is the one PR-mutation the shaping agent is authorized to make directly.
+3. **Surfacing an `update-branch` need on THIS issue's pipeline PR**, when its base branch has gained a fix
+   the PR needs: the shaping agent's duty is only to flag that it's needed. After the base fix lands, the
+   RESEARCHER — their own allowlisted identity, not this skill's write path — runs `gh pr update-branch <n>`
+   directly, the same way they flip `ready`.
 
 ### LEGACY — the dispatcher contract (fallback path only)
 
