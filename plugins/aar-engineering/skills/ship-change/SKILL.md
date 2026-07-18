@@ -32,28 +32,14 @@ repo), in which case use the on-box lifecycle and record which criterion applied
 cloud-ship is for repo-self-contained changes on repos WITHOUT the pipeline.
 
 **Pipeline-enabled repos — this is the DEFAULT shipping flow, not the lifecycle below** (the routing rule
-above). One sequence, no unconditional create:
+above):
 
-1. **Search first** for a backlog issue that already covers the change.
-2. **None found** → file a well-shaped Issue via the instance's engineer-bot token seam (`wf.sh issue
-   <claude|codex> create -R <owner/repo> -t "..." -b "..."`, backed by `WF_ENGINEER_TOKEN_CMD_*`); ambient
-   `gh` remains read-only. Body shape: Problem / Design / Non-goals / Acceptance — concrete enough for an
-   implementor who cannot ask questions.
-3. **Found** → reuse the existing issue only when ALL THREE hold: its author is on the pipeline allowlist
-   (`AGENTS.md` "GitHub-native SWE pipeline", Authorization predicate); its body, as-written, already meets
-   the design-in-description bar (same shape as above); AND the issue thread contains no comments from
-   non-allowlisted accounts (checkable by inspection before flipping `ready`). A comment never supplies or
-   supersedes the design — the implementor's spec is the body.
-   - **All three hold** → stop, nothing to write; the researcher flips `ready` on THAT issue.
-   - **Any fails** (author not allowlisted, the body doesn't meet the bar, or a non-allowlisted comment is
-     present) → file a fresh shaped issue through the engineer-token seam (allowlisted by construction) that
-     links the original (`wf.sh issue <claude|codex> create -R <owner/repo> -t "..." -b "..."` referencing
-     `#<N>`); leave the original OPEN with a cross-link comment (`wf.sh issue <claude|codex> comment <N> -R
-     <owner/repo> -b "..."` referencing `#<new>`). Closing the original is optional and the researcher's
-     call — never automatic.
-   - The underlying exposure this guards against — a privileged implementor consumes the full issue thread,
-     not just the body — is tracked as issue #52; this thread-condition gate is the doc-level mitigation
-     until that lands.
+File a well-shaped Issue via the instance's engineer-bot token seam (`wf.sh issue <claude|codex> create -R
+<owner/repo> -t "..." -b "..."`, backed by `WF_ENGINEER_TOKEN_CMD_*`); ambient `gh` remains read-only. Body
+shape: Problem / Design / Non-goals / Acceptance — concrete enough for an implementor who cannot ask
+questions. If a prior issue already covers the topic, the fresh issue links it (referencing `#<N>`) rather
+than reusing it directly; the researcher may close the old one manually. (Reusing a covering issue directly
+becomes possible again once issue #52, the comment-trust-boundary work, lands.)
 
 Then **STOP**. `ready` is applied by the researcher (a human), never self-applied by the agent — the label
 flip on an allowlisted repo IS the dispatch (`implement-on-ready.yml` picks it up automatically; `AGENTS.md`
