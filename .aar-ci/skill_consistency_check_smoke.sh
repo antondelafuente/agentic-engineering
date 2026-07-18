@@ -149,4 +149,25 @@ VC12="$P12/plugins/verify-claims/skills/verify-claims/SKILL.md"
 printf '\n```\ngh api --method "GET" repos/owner/repo/issues\n```\n' >> "$VC12"
 expect PASS pass5-quoted-get-method "$P12"
 
+# 13. A global option BEFORE the noun (`gh -R owner/repo issue create`) must still fail pass 5 — ordinary
+#     gh syntax, not adversarial obfuscation (mirrors gh-guard.sh's own global-flag skip).
+P13=$(fixture pass13)
+VC13="$P13/plugins/verify-claims/skills/verify-claims/SKILL.md"
+printf '\n```\ngh -R owner/repo issue create -t "..." -b "..."\n```\n' >> "$VC13"
+expect FAIL pass5-global-option-before-noun "$P13" "pass5:.*ambient 'gh issue create'"
+
+# 14. An attached `-XPOST` API method must still fail pass 5 — ordinary gh syntax (gh-guard.sh's `-X*` arm).
+P14=$(fixture pass14)
+VC14="$P14/plugins/verify-claims/skills/verify-claims/SKILL.md"
+printf '\n```\ngh api -XPOST repos/owner/repo/issues\n```\n' >> "$VC14"
+expect FAIL pass5-attached-x-post "$P14" "pass5:.*ambient 'gh api' WRITE"
+
+# 15. A concrete-argument `wf.sh issue codex create` example (family + real sub-verb, no placeholders)
+#     must pass pass 1 — the sub-verb is the token AFTER the family token, not "the first non-placeholder
+#     token" (which would misread `codex` itself as the sub-verb).
+P15=$(fixture pass15)
+SC15="$P15/plugins/aar-engineering/skills/ship-change/SKILL.md"
+printf '\nFor example: `wf.sh issue codex create -R owner/repo -t "..." -b "..."`.\n' >> "$SC15"
+expect PASS pass1-concrete-wf-issue-codex-create "$P15"
+
 [ "$fails" = 0 ] && { echo "[skill_consistency_check_smoke] PASS"; exit 0; } || { echo "[skill_consistency_check_smoke] FAIL"; exit 1; }

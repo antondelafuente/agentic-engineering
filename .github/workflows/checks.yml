@@ -65,22 +65,28 @@ jobs:
           fi
           mapfile -t changed_paths <<< "$diff_output"
 
-          # Overwrite the .aar-ci/ CI profile in place with its BASE-ref content before running it, so a
-          # PR cannot weaken checks.sh (or a helper it directly shells out to, like fake_home_smoke.sh) in
-          # the same diff and trivially pass its own required check. This covers the per-repo CI profile
+          # Overwrite these files in place with their BASE-ref content before running checks.sh, so a PR
+          # cannot weaken the checker (or a helper/denylist it directly depends on) in the same diff that
+          # violates it and trivially pass its own required check. This covers the per-repo CI profile
           # ship-change's own SKILL.md names as the trust boundary (checks.sh + fake_home_smoke.sh +
-          # checks_marketplace_smoke.sh) -- the actual working tree everything else runs against is still
-          # the real PR-head content, only these three files are pinned to base. checks.sh also shells out
-          # to dozens of PER-PLUGIN smoke scripts scattered under plugins/*/skills/*/scripts/ depending on
-          # which paths changed; materializing every one of those from base too would silently break
-          # legitimate PRs that add a new plugin's smoke test alongside the plugin itself (the base ref
-          # wouldn't have that new smoke script yet), so that broader surface is left as an accepted
-          # residual risk -- mitigated by the cross-family Codex review scrutinizing the exact same diff
-          # under its P0 trust-boundary-violation criteria, not by this gate.
-          for f in checks.sh fake_home_smoke.sh checks_marketplace_smoke.sh; do
-            if git cat-file -e "$BASE_SHA:.aar-ci/$f" 2>/dev/null; then
-              git show "$BASE_SHA:.aar-ci/$f" > ".aar-ci/$f"
-              chmod +x ".aar-ci/$f"
+          # checks_marketplace_smoke.sh), plus the skill-consistency checker introduced by
+          # agentic-engineering#54 -- skill_consistency_check.sh, its smoke, and the RETIRED_PHRASES.txt
+          # denylist it enforces (agentic-engineering#57 review) -- so a PR can't loosen the consistency
+          # checker, its smoke, or the denylist in the same change it would otherwise violate. The actual
+          # working tree everything else runs against is still the real PR-head content, only these files
+          # are pinned to base. checks.sh also shells out to dozens of PER-PLUGIN smoke scripts scattered
+          # under plugins/*/skills/*/scripts/ depending on which paths changed; materializing every one of
+          # those from base too would silently break legitimate PRs that add a new plugin's smoke test
+          # alongside the plugin itself (the base ref wouldn't have that new smoke script yet), so that
+          # broader surface is left as an accepted residual risk -- mitigated by the cross-family Codex
+          # review scrutinizing the exact same diff under its P0 trust-boundary-violation criteria, not by
+          # this gate.
+          for f in .aar-ci/checks.sh .aar-ci/fake_home_smoke.sh .aar-ci/checks_marketplace_smoke.sh \
+                   .aar-ci/skill_consistency_check.sh .aar-ci/skill_consistency_check_smoke.sh \
+                   plugins/aar-engineering/RETIRED_PHRASES.txt; do
+            if git cat-file -e "$BASE_SHA:$f" 2>/dev/null; then
+              git show "$BASE_SHA:$f" > "$f"
+              case "$f" in *.sh) chmod +x "$f" ;; esac
             fi
           done
           bash .aar-ci/checks.sh "${changed_paths[@]}"

@@ -153,12 +153,20 @@ def clean_token(tok):
     return tok.strip('`*_,.()')
 
 
-def first_real_token(tokens):
-    for tok in tokens:
-        ctok = clean_token(tok)
-        if ctok and not ctok.startswith('<'):
-            return ctok
-    return None
+def token_at(tokens, idx):
+    # The real wf.sh CLI shapes are POSITIONAL, not "first concrete word": `wf.sh issue <family>
+    # <subverb> ...` puts the sub-verb right after the family token (claude/codex) regardless of
+    # whether the family itself is a placeholder or a concrete worked-example value (`wf.sh issue codex
+    # create` — `codex` is NOT the sub-verb even though it's the first non-placeholder token); `wf.sh
+    # fdispo <worktree> <author> <disposition>` puts two positional args before the disposition. So we
+    # index by fixed position and only skip validation when THAT position is itself an angle-bracket
+    # placeholder (a generic usage line, not a concrete prescription).
+    if idx >= len(tokens):
+        return None
+    ctok = clean_token(tokens[idx])
+    if not ctok or ctok.startswith('<'):
+        return None
+    return ctok
 
 
 def wf_calls(text):
@@ -175,14 +183,14 @@ for path, text in docs.items():
             err(f"pass1: {rel}: prescribes 'wf.sh {verb}' — no such wf.sh verb")
             continue
         if verb == "issue" and issue_subverbs:
-            sub = first_real_token(rest)
+            sub = token_at(rest, 1)  # rest[0] is the family (claude|codex); the sub-verb follows it
             if sub is not None:
                 pieces = [clean_token(p) for p in sub.split('|')]
                 bad = [p for p in pieces if p and p not in issue_subverbs]
                 if bad:
                     err(f"pass1: {rel}: prescribes 'wf.sh issue ... {sub}' — unknown issue sub-verb(s) {bad}")
         if verb == "fdispo" and fdispo_subverbs:
-            sub = first_real_token(rest)
+            sub = token_at(rest, 2)  # rest[0], rest[1] are worktree, author; the disposition follows them
             if sub is not None:
                 pieces = [clean_token(p) for p in sub.split('|')]
                 bad = [p for p in pieces if p and p not in fdispo_subverbs]
@@ -350,11 +358,21 @@ WRITE_VERBS = {
 }
 NEGATION_RE = re.compile(r"\b(never|not|don'?t|avoid|no bare|against|prohibited|forbidden)\b", re.I)
 RESEARCHER_RE = re.compile(r"researcher", re.I)
-GH_WRITE_RE = re.compile(r"\bgh\s+(issue|pr)\s+([a-z][a-z-]*)", re.I)
+
+# gh-guard.sh's own subcommand/verb scan (its next_word helper, lines ~72-112) skips arbitrary global
+# flags — WITH their value, whether attached (`--flag=value`) or separated (`--flag value`) — both before
+# the subcommand (`gh -R o/r issue create`) and again between the subcommand and its verb (`gh issue -R o/r
+# create`), since the guard calls next_word twice: once from index 0 for `sub`, once from `sub_idx+1` for
+# `verb`. Mirror both skips with the same flag-skipping group reused in both positions, rather than
+# anchoring `issue|pr|api` immediately after `gh`.
+GH_FLAG_SRC = r"--?[A-Za-z][A-Za-z-]*(?:[= ]\S+)?"
+GH_FLAGS_SRC = r"(?:\s+(?:" + GH_FLAG_SRC + r"))*"
+GH_PREFIX_SRC = r"\bgh" + GH_FLAGS_SRC + r"\s+"
+GH_WRITE_RE = re.compile(GH_PREFIX_SRC + r"(issue|pr)" + GH_FLAGS_SRC + r"\s+([a-z][a-z-]*)", re.I)
 
 # `gh api`: mirrors gh-guard.sh's own default-deny for the `api` subcommand — a write is any non-GET/HEAD
 # method or any body-implying field flag; a bare `gh api <path>` with neither defaults to GET and is a read.
-GH_API_RE = re.compile(r"\bgh\s+api\b.*", re.I)
+GH_API_RE = re.compile(GH_PREFIX_SRC + r"api\b.*", re.I)
 GH_API_METHOD_RE = re.compile(r"(?:^|\s)-X\s*(\S+)|(?:^|\s)--method[=\s]+(\S+)", re.I)
 # gh-guard.sh:229-230 classifies ANY token starting with -f/-F as a body flag (its bash `-f*|-F*` arm), not
 # just the bare/`=`-joined forms — mirror that here so attached short flags like `-ftitle=x`/`-Fbody=@file`
