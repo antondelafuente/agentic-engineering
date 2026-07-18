@@ -8,8 +8,9 @@ description: >-
   change to the product scaffold (skills, plugins, CI, the constitution). The agents ARE the engineers: a
   change is authored by one family and reviewed by the OTHER. ENFORCED repos can require the --code review as
   a native opposite-family engineer review before merge. Worktree-from-the-start — never disturbs the shared
-  main checkout. When the deployment configures a Claude Code cloud environment, prefer the sibling cloud-ship
-  skill for repo-self-contained changes; ship-change is the on-box path and the fallback.
+  main checkout. When the target repo runs the SWE pipeline, prefer filing a ready-gated issue over running
+  this skill's lifecycle; cloud-ship covers repo-self-contained changes on non-pipeline repos; ship-change is
+  the on-box path and the fallback.
 ---
 
 # ship-change — the GitHub-backed scaffold-change lifecycle
@@ -24,33 +25,37 @@ this ships a change to the *product itself*. It belongs to the **SWE pipeline** 
 section — that's the one authoritative signal. The repo's `ready` label existing is corroborating only,
 never the decider.
 
-**Pipeline-enabled repos — this is the DEFAULT shipping flow, not the lifecycle below.** File a well-shaped
-Issue — a new one, or the existing backlog issue if one already covers the change — via the instance's
-engineer-bot token seam (`wf.sh issue <claude|codex> create -R <owner/repo> -t "..." -b "..."`, backed by
-`WF_ENGINEER_TOKEN_CMD_*`); ambient `gh` remains read-only. Body shape: Problem / Design / Non-goals /
-Acceptance — concrete enough for an implementor who cannot ask questions. Then **STOP**. `ready` is applied
-by the researcher (a human), never self-applied by the agent — the label flip on an allowlisted repo IS the
-dispatch (`implement-on-ready.yml` picks it up automatically; `AGENTS.md` "GitHub-native SWE pipeline"). Do
-not begin implementing locally while waiting for the flip, and do not run the in-session lifecycle below.
-(Where the researcher files the Issue themselves, interactively, that's the researcher's own identity —
-outside this skill's write path.)
+**The routing rule** (stated once — every other mention of routing below points here rather than restating
+it): On a pipeline-enabled repo, ship via the SWE pipeline — unless the change meets a named can't-take
+criterion (box-local state/secrets; coordinated multi-repo atomic change; instance-only config outside any
+repo), in which case use the on-box lifecycle and record which criterion applied in the issue/PR body.
+cloud-ship is for repo-self-contained changes on repos WITHOUT the pipeline.
 
-**The in-session lifecycle below is the FALLBACK.** On a pipeline-enabled repo it is permitted ONLY when the
-change meets one of these can't-take criteria — otherwise it's prohibited:
-- requires box-local state/secrets unavailable to the cloud implementor
-- requires coordinated multi-repo atomic changes
-- edits instance-only config outside any repo
+**Pipeline-enabled repos — this is the DEFAULT shipping flow, not the lifecycle below** (the routing rule
+above). File a well-shaped Issue via the instance's engineer-bot token seam (`wf.sh issue <claude|codex>
+create -R <owner/repo> -t "..." -b "..."`, backed by `WF_ENGINEER_TOKEN_CMD_*`); ambient `gh` remains
+read-only. Body shape: Problem / Design / Non-goals / Acceptance — concrete enough for an implementor who
+cannot ask questions.
 
-On a repo that is not pipeline-enabled, the fallback is simply the path — no criterion needed. See the
+**If a backlog issue already covers the change:** verify its body meets the design-in-description bar,
+update it if not (through the engineer-token seam), and stop — the researcher flips `ready` on THAT issue.
+Only file a new issue (`wf.sh issue <claude|codex> create` via the seam) when none exists.
+
+Then **STOP**. `ready` is applied by the researcher (a human), never self-applied by the agent — the label
+flip on an allowlisted repo IS the dispatch (`implement-on-ready.yml` picks it up automatically; `AGENTS.md`
+"GitHub-native SWE pipeline"). Do not begin implementing locally while waiting for the flip, and do not run
+the in-session lifecycle below. (Where the researcher files the Issue themselves, interactively, that's the
+researcher's own identity — outside this skill's write path.)
+
+**The in-session lifecycle below is the FALLBACK** — see the routing rule above for when it applies. See the
 legacy fallback subsection below (marked LEGACY) for how the fallback path itself is run once selected.
 
-**Preference order, single-sourced:** (1) the **SWE pipeline** above, on pipeline-enabled repos — always
-wins when the test above is met; (2) the sibling **`cloud-ship`** skill, on repos WITHOUT the pipeline, for
-repo-self-contained changes, when the deployment configures a Claude Code cloud environment: it runs the
-author + cross-family review legs on a cloud VM and gates the bot close on the trusted host (the box holds
-the engineer keys); (3) **this on-box `ship-change` lifecycle**, for everything else — no cloud environment
-configured, the change needs box-local state, the cloud surface fails twice on the same Issue, or (on a
-pipeline-enabled repo) a can't-take criterion above is met. This is **deployment-conditional**: nothing here
+**Preference order:** (1) the SWE pipeline, on pipeline-enabled repos (the routing rule above); (2) the
+sibling **`cloud-ship`** skill, on repos WITHOUT the pipeline, for repo-self-contained changes, when the
+deployment configures a Claude Code cloud environment: it runs the author + cross-family review legs on a
+cloud VM and gates the bot close on the trusted host (the box holds the engineer keys); (3) **this on-box
+`ship-change` lifecycle**, for everything else — no cloud environment configured, the change needs box-local
+state, or the cloud surface fails twice on the same Issue. This is **deployment-conditional**: nothing here
 assumes a cloud environment exists, and where none is configured `ship-change` is simply the path.
 
 **The agents are the engineers** (`AGENTS.md` "The vision"). Every change is **authored by one model
@@ -88,8 +93,7 @@ Actions pipeline does that (`AGENTS.md` "GitHub-native SWE pipeline"). What's le
 
 ### LEGACY — the dispatcher contract (fallback path only)
 
-**Entry condition:** only when the Routing test (above) selects the fallback — the repo is not
-pipeline-enabled, or the change meets one of the three can't-take criteria; on a pipeline-enabled repo this
+**Entry condition:** only when the routing rule (above) selects the fallback; on a pipeline-enabled repo this
 path is otherwise prohibited (it bypasses the GitHub-native pipeline's own authorization and audit trail).
 
 Once the fallback is selected, this skill is typically executed end-to-end by a dispatched one-shot
