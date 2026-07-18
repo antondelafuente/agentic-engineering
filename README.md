@@ -14,3 +14,8 @@ The engineering team's tooling — ship product/scaffold changes through a GitHu
 - **verify-claims** — the cross-family review engine ship-change gates on (`--scaffold`/`--code`), self-contained in this repo.
 
 See `AGENTS.md` for the engineering pipeline and the Issue disposition contract.
+
+Running the full lifecycle yourself (not just installing the skills) takes more than that: the pipeline's
+own GitHub Apps, secrets, labels, and branch protection all need to be set up on your repo. See
+[RUNBOOK.md → Self-hosting](plugins/aar-engineering/skills/ship-change/RUNBOOK.md#self-hosting) for what's
+actually involved.
