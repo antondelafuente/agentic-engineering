@@ -160,4 +160,19 @@ If a plugin manifest changed, after a revert/merge refresh installed plugins:
 
 ## Self-hosting
 
-agentic-engineering ships its own changes through this `ship-change` (self-hosted). From Phase 2 on, its `main` is branch-protected like any product repo.
+agentic-engineering ships its own changes through this `ship-change` (self-hosted). From Phase 2 on, its `main`
+is branch-protected like any product repo. Minimal setup checklist to self-host this pipeline on a repo:
+
+1. **Install two GitHub Apps** on the repo: `claude-code-engineer` (author/implementor identity) and
+   `codex-engineer` (reviewer identity) — see "Engineer identities (as-built)" above for the permissions
+   each needs.
+2. **Provision the six Actions secrets**: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_APP_ID`,
+   `CLAUDE_APP_PRIVATE_KEY`, `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`. Until all six are set, `ready` events
+   fail loudly in the Actions tab (a missing-secret error at token-mint) rather than silently doing
+   something else.
+3. **Set branch protection on `main`** to require the `checks` status (from `checks.yml`) plus
+   `codex-engineer`'s native review as the required approving review — via the owner-token maintenance
+   path (`WF_GH_ALLOW_OWNER_WRITE=1`), since an engineer-bot App token cannot modify branch protection on
+   itself. See "What's enforced (as-built)" above for the full rule set.
+4. **Read `AGENTS.md`'s "GitHub-native SWE pipeline" section** for the trust model this setup relies on
+   (allowlisted actors, fork-PR isolation, the accepted residual risk on a public repo).

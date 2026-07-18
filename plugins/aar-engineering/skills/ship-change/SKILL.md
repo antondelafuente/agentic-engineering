@@ -173,9 +173,9 @@ workflow if unsure. `wf.sh` is `scripts/wf.sh` in this skill.
 # 0. An Issue exists (the backlog item). Create it if not — author it as the ENGINEER identity, not the
 #    human owner: wf.sh issue <claude|codex> create -R <owner/repo> -t "..." -b "..."  → note its number <N>.
 #    Engineer-identity tracker MAINTENANCE uses the same path with NARROW, allowlisted verbs (no arbitrary
-#    `gh` passthrough — the automated-researcher#91 model): `wf.sh issue <fam> comment|close|label|dispose`. `dispose <N> --label
+#    `gh` passthrough — the antondelafuente/automated-researcher#91 model): `wf.sh issue <fam> comment|close|label|dispose`. `dispose <N> --label
 #    <disp> --body-line "blocked-by: #M"` atomically sets one disposition label + an idempotent body line (the
-#    `blocked` path). These exist so the automated-researcher#149 gh write-guard never strands triage-feedback's closes/labels.
+#    `blocked` path). These exist so the antondelafuente/automated-researcher#149 gh write-guard never strands triage-feedback's closes/labels.
 #
 #    PRE-FLIGHT — before creating the worktree (step 1), read <N>'s disposition. Not `ready` — including
 #    unlabeled/untriaged — STOP: do not implement. Route instead:
@@ -256,7 +256,7 @@ engineer identity, not the human owner's token. A HIGH must be fixed or genuinel
 (The cross-family reviewer is adversarial and fresh each round, so it may surface a new angle — don't chase it past
 HIGH=0 into endless polish; the merge bar is HIGH=0 + checks green.)
 
-### Disposition-aware merge gate (automated-researcher#137/#139) — for broad changes that won't converge
+### Disposition-aware merge gate (antondelafuente/automated-researcher#137 / antondelafuente/automated-researcher#139) — for broad changes that won't converge
 
 When a review keeps re-raising findings you've already addressed (the convergence trap on a broad
 change), opt the PR into the **disposition-aware** gate. State is **PR-local** (a canonical PR comment,
@@ -279,14 +279,14 @@ disposition, BLOCKS — fail-closed, independent of the model). Recovery: a malf
 gate with the offending finding; fix it and re-`save`. No state on a PR → the normal stateless review (this is
 opt-in).
 
-**Fresh-eyes companion (automated-researcher#140) — automatic, no action needed.** On a disposition-aware `finish`, the gate also
+**Fresh-eyes companion (antondelafuente/automated-researcher#140) — automatic, no action needed.** On a disposition-aware `finish`, the gate also
 runs ONE un-anchored stateless sweep and posts it as a `## Fresh-eyes sweep` PR comment. Those are **candidate
 findings only**: do **not** `fdispo seed` them, and they are **not** a verdict. The disposition-aware merge
 review semantically adjudicates them (surfaces any genuinely-new/pre-existing hole as a residual HIGH); only
 the **residual merge-review findings** are what you disposition. The sweep just guarantees the stateful gate
 never trusts a pre-existing hole past.
 
-**Non-convergence backstop (automated-researcher#137) — automatic.** The disposition-aware `finish` counts merge-gate review
+**Non-convergence backstop (antondelafuente/automated-researcher#137) — automatic.** The disposition-aware `finish` counts merge-gate review
 rounds that *still left a blocking HIGH* (one per fingerprint-distinct blocking merge review; a clean review
 merges and does not count, and a bare identical re-run does not re-count). If a PR is still blocked after
 `WF_NONCONVERGENCE_ROUNDS` rounds (default **4**), the gate stops saying "fix and re-run" and instead reports
@@ -317,7 +317,7 @@ GitHub is the durable coordination record, but it should read like a handoff to 
 
 - **verify-claims `--scaffold` / `--code`** — the cross-family design + code reviewers. For SWE reviews the
   review **engine comes from agentic-engineering itself, NOT the repo under review** (`locate_swe_audit`,
-  Phase 3b / automated-researcher#255): the SWE-review modes live with ship-change, and the repo being changed may carry only the
+  Phase 3b / antondelafuente/automated-researcher#255): the SWE-review modes live with ship-change, and the repo being changed may carry only the
   experiment-audit modes. **SWE reviewer resolution (`locate_swe_audit`), fail-closed:** (1) `AUDIT_EXPERIMENT=<path>`
   override; (2) **agentic-engineering's own checkout**, validated by a marker no other repo carries post-cutover
   (it has BOTH ship-change's `wf.sh` AND a verify-claims reviewer in-tree), materialized from its *base* ref

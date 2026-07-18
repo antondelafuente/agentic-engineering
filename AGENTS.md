@@ -134,12 +134,10 @@ itself, ships by labeling an Issue `ready`.
   Until all six are set, `ready` events fail loudly in the Actions tab (a missing-secret error at
   token-mint) rather than silently doing something else. (On this repo, all six are already provisioned as
   of this PR.)
-- **Post-merge step, not this PR's concern:** branch protection's *required-check* addition for the new
-  `checks` status (and, if desired, `review-on-pr`'s native review as a required approval) happens after
-  this PR merges, via the owner-token maintenance path (`WF_GH_ALLOW_OWNER_WRITE=1`) — an engineer-bot App
-  token cannot modify branch protection on itself. Until that lands, `checks.yml` still runs and posts its
-  status on every PR, but is not yet a *required* gate for auto-merge; this gap is deliberately scoped and
-  time-bounded (see agentic-engineering#44's description), not silently accepted indefinitely.
+- **Required-check status (as-built):** branch protection on `main` requires the `checks` status (the
+  `checks.yml` Action) as a required GitHub-reported status, with `review-on-pr`'s native cross-family
+  review as the required approving review — added via the owner-token maintenance path
+  (`WF_GH_ALLOW_OWNER_WRITE=1`), since an engineer-bot App token cannot modify branch protection on itself.
 
 ## Cross-repo references
 

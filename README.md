@@ -17,4 +17,4 @@ See `AGENTS.md` for the engineering pipeline and the Issue disposition contract.
 
 Running the full lifecycle yourself (not just installing the skills) requires two engineer GitHub Apps plus
 the `WF_ENGINEER_TOKEN_CMD_*` seams and branch protection set up; see
-`plugins/aar-engineering/skills/ship-change/RUNBOOK.md` → **Self-hosting**.
+[RUNBOOK.md → Self-hosting](plugins/aar-engineering/skills/ship-change/RUNBOOK.md#self-hosting).
