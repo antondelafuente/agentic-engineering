@@ -411,6 +411,12 @@ jobs:
             if [ -z "$report" ]; then
               report="(codex did not produce a consolidated_report for this round; see this review and the prior rounds on this PR for full history.)"
             fi
+            # code-review finding: this report is posted verbatim under the codex-engineer App token, and
+            # is asked to recount prior rounds' dispositions, which on this PR all begin with the literal
+            # "@claude-code-engineer" mention. address-review.yml's job predicate is a plain contains()
+            # check and codex-engineer[bot] is an allowlisted author, so a quoted excerpt would re-trigger
+            # a privileged round. Break the substring so it can never match that predicate.
+            report=${report//"@claude-code-engineer"/"[@]claude-code-engineer"}
 
             gh api "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=needs-human"
 
