@@ -40,6 +40,7 @@ then succeeds only because the required approval is present. Architectural and m
 **same** gate — the cross-family review + checks, author-triaged; there is no classification step and no
 per-change human design approval. As-built config + escape hatches: `RUNBOOK.md`.
 
+<!-- LEGACY:START -->
 ## Who runs this skill — the dispatcher contract
 
 This skill is typically executed end-to-end by a dispatched one-shot implementor session; a longer-lived
@@ -68,6 +69,7 @@ dispatcher launches it and owns three duties:
 
 How each duty is implemented (session runtime, model pinning, reaping) is deployment-owned; this skill
 states only the contract.
+<!-- LEGACY:END -->
 
 ## The non-negotiable properties (the driver enforces them — don't work around them)
 

@@ -133,6 +133,20 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/experiment-lifecycle/skills/
   done
 fi
 
+# 1f. skill consistency (agentic-engineering#54): five deterministic passes over every
+#     plugins/*/skills/*/SKILL.md (wf.sh command existence, single-sourced routing, frontmatter/body
+#     agreement, retired-phrase denylist, prohibited-op grep) so the docs-as-policy layer can't silently
+#     drift from the tooling or itself (the PR #51 incident this exists to catch at doc-time). Runs
+#     UNCONDITIONALLY every invocation — doc consistency is a whole-tree invariant, not an incremental-diff
+#     property, so every PR (including one that never touches plugins/) is covered.
+SKILL_CONSISTENCY="$ROOT/.aar-ci/skill_consistency_check.sh"
+if [ -f "$SKILL_CONSISTENCY" ]; then
+  echo "[checks] skill consistency (plugins/*/skills/*/SKILL.md)" >&2
+  bash "$SKILL_CONSISTENCY" >&2 && ok "skill_consistency_check" || err "skill consistency check FAILED"
+else
+  err "skill_consistency_check.sh missing at .aar-ci/skill_consistency_check.sh — cannot verify plugins/ doc consistency"
+fi
+
 # 2. shell syntax — *.sh AND extensionless shell scripts (e.g. .githooks/* hooks) detected by shebang
 for p in "${PATHS[@]}"; do
   [ -f "$p" ] || continue
@@ -375,6 +389,21 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^(\.github/scripts/canonical(-login|_
     bash "$CL_SMOKE" >&2 && ok "canonical_login smoke" || err "canonical_login smoke FAILED"
   else
     err "canonical-login.sh or a SWE-pipeline workflow changed but canonical_login_smoke.sh missing — cannot verify login canonicalization"
+  fi
+fi
+
+# 14. skill-consistency smoke (agentic-engineering#54): fixture-based regression test for the 1f check
+#     above — asserts a reintroduced PR #51 round-3 error (`wf.sh issue edit`) fails pass 1, a reintroduced
+#     round-8 error (contradictory cloud-ship frontmatter/body assertion) fails pass 3, an unmarked retired
+#     phrase fails pass 4, a fenced ambient `gh` write fails pass 5, and pass 2 only WARNs. Runs when the
+#     checker, its smoke, or the retired-phrase denylist changed.
+if printf '%s\n' "${PATHS[@]}" | grep -Eq '^(\.aar-ci/skill_consistency_check(_smoke)?\.sh|plugins/aar-engineering/RETIRED_PHRASES\.txt)$'; then
+  SKC_SMOKE="$ROOT/.aar-ci/skill_consistency_check_smoke.sh"
+  if [ -f "$SKC_SMOKE" ]; then
+    echo "[checks] skill-consistency smoke" >&2
+    bash "$SKC_SMOKE" >&2 && ok "skill_consistency_check smoke" || err "skill-consistency smoke FAILED"
+  else
+    err "skill_consistency_check.sh or RETIRED_PHRASES.txt changed but skill_consistency_check_smoke.sh missing — cannot verify the checker"
   fi
 fi
 
