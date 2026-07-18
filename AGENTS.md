@@ -111,6 +111,10 @@ itself, ships by labeling an Issue `ready`.
     file's `Rules`. Blocks `APPROVE` — the PR gets `REQUEST_CHANGES` instead.
   - **P1 (non-blocking):** style, minor edge cases, suggestions, simplification opportunities. Recorded in
     the review body for a later human pass; never blocks merge on its own.
+  - **Exhaustive enumeration:** each review must enumerate EVERY reachable blocking (P0) finding in the
+    artifact as revised — re-verify the ENTIRE consistency surface (all files the change's rules must
+    agree with), not only the diff or previously-cited lines. A finding that existed in a prior round and
+    was not reported is a review-process defect.
   <!-- CODEX-REVIEW-GUIDANCE:END -->
 - **Re-entry / retry:** re-dispatch an issue by removing and re-adding `ready`, or via
   `workflow_dispatch`. Post-review fixes ride `address-review.yml`'s mention flow instead: an allowlisted

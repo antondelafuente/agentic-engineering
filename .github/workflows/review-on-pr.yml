@@ -34,6 +34,8 @@ jobs:
         github.event.pull_request.user.login == 'app/claude-code-engineer')
     outputs:
       head_sha: ${{ steps.capture.outputs.head_sha }}
+      prior_consecutive: ${{ steps.history.outputs.prior_consecutive }}
+      round_limit: ${{ steps.history.outputs.round_limit }}
     steps:
       - name: Capture PR head SHA
         id: capture
@@ -97,7 +99,10 @@ jobs:
         # the PR page regardless of what's fed to the reviewer; and (4) the prompt's adjudicate-not-suppress
         # instruction means a missing disposition just causes the finding to be judged fresh again, not
         # wrongly suppressed — the safe failure direction. MAX_ROUNDS=6 also comfortably covers this PR's own
-        # 3-round history to date.
+        # 3-round history to date. MAX_ROUNDS is a history-WINDOW size only — how much prior context gets
+        # rendered into the reviewer's prompt each round — and is independent of ROUND_LIMIT below
+        # (agentic-engineering#53), which bounds how many consecutive CHANGES_REQUESTED rounds this PR may
+        # accumulate before the pipeline escalates to a human instead of rendering another round.
         id: history
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,6 +111,10 @@ jobs:
         run: |
           set -euo pipefail
           MAX_ROUNDS=6
+          # Escalation cap (agentic-engineering#53): a PR that racks up ROUND_LIMIT consecutive
+          # CHANGES_REQUESTED reviews from codex-engineer[bot] gets `needs-human` + a consolidated report
+          # instead of a (ROUND_LIMIT+1)th round — see the count below and submit-verdict's escalation step.
+          ROUND_LIMIT=3
           MAX_CHARS=20000
           REVIEW_ALLOW='["codex-engineer[bot]"]'
           COMMENT_ALLOW='["antondelafuente","claude-code-engineer[bot]"]'
@@ -130,6 +139,20 @@ jobs:
               | map(select(((.body // "") as $body | $noise | any(. as $prefix | $body | startswith($prefix))) | not))
               | map({ts: .created_at, kind: "comment", user: .user.login, state: null, body})
           ')
+
+          # Consecutive-CHANGES_REQUESTED count for the round-limit escalation (agentic-engineering#53):
+          # walk codex-engineer[bot]'s reviews newest-first and count while state stays CHANGES_REQUESTED,
+          # stopping at the first APPROVED/COMMENTED/DISMISSED or the end of history. Deliberately computed
+          # from the UNCAPPED $reviews (not $reviews_capped below), since MAX_ROUNDS bounds the rendering
+          # window, not how far back this count may look.
+          prior_consecutive=$(jq '
+            sort_by(.ts) | reverse
+            | reduce .[] as $r ({n: 0, stop: false};
+                if .stop then .
+                elif $r.state == "CHANGES_REQUESTED" then {n: (.n + 1), stop: false}
+                else {n: .n, stop: true} end)
+            | .n
+          ' <<<"$reviews")
 
           reviews_total=$(jq 'length' <<<"$reviews")
           comments_total=$(jq 'length' <<<"$comments")
@@ -169,6 +192,8 @@ jobs:
           {
             echo "count=$capped_count"
             echo "note=$note"
+            echo "prior_consecutive=$prior_consecutive"
+            echo "round_limit=$ROUND_LIMIT"
             echo "rendered<<$delim"
             printf '%s\n' "$rendered"
             echo "$delim"
@@ -185,6 +210,8 @@ jobs:
           HISTORY_COUNT: ${{ steps.history.outputs.count }}
           HISTORY_NOTE: ${{ steps.history.outputs.note }}
           HISTORY_RENDERED: ${{ steps.history.outputs.rendered }}
+          PRIOR_CONSECUTIVE: ${{ steps.history.outputs.prior_consecutive }}
+          ROUND_LIMIT: ${{ steps.history.outputs.round_limit }}
         run: |
           set -euo pipefail
 
@@ -201,6 +228,23 @@ jobs:
           $HISTORY_RENDERED"
           else
             history_section="This is the first review of this PR; there is no prior review history to consider."
+          fi
+
+          # Round-limit heads-up (agentic-engineering#53): only non-empty once this PR is already AT the
+          # escalation cap, so a "changes_requested" verdict this round would be the (ROUND_LIMIT+1)th
+          # consecutive one and the pipeline will hand it to a human instead of looping again.
+          round_limit_section=""
+          if [ "$PRIOR_CONSECUTIVE" -ge "$ROUND_LIMIT" ]; then
+            round_limit_section="
+
+          This PR has already received $PRIOR_CONSECUTIVE consecutive CHANGES_REQUESTED reviews from you,
+          at this pipeline's $ROUND_LIMIT-round limit. If you find any P0 and your verdict is
+          \"changes_requested\" again, this round escalates to a human instead of continuing the loop. In
+          that case, ALSO fill in \"consolidated_report\": a single write-up covering (1) every finding
+          still open as of this round (P0 and P1), (2) every prior round's disposition of each finding
+          (fixed, disputed, or left unaddressed), and (3) any contradictions between those dispositions and
+          the code as it stands now — so the human gets one decision surface instead of an archaeology
+          task. Leave \"consolidated_report\" null if your verdict is \"approve\"."
           fi
 
           prompt=$(cat <<PROMPT
@@ -221,6 +265,7 @@ jobs:
           "approve" only if you find zero P0 findings; otherwise "changes_requested". List every finding
           you have, P0 and P1 alike, in the findings array — non-blocking P1 findings are still recorded
           for a later human pass, never omitted.
+          $round_limit_section
           PROMPT
           )
 
@@ -256,7 +301,7 @@ jobs:
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["verdict", "findings"],
+              "required": ["verdict", "findings", "consolidated_report"],
               "properties": {
                 "verdict": { "enum": ["approve", "changes_requested"] },
                 "findings": {
@@ -271,7 +316,8 @@ jobs:
                       "evidence": { "type": ["string", "null"] }
                     }
                   }
-                }
+                },
+                "consolidated_report": { "type": ["string", "null"] }
               }
             }
 
@@ -311,6 +357,8 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           CAPTURED_HEAD_SHA: ${{ needs.review.outputs.head_sha }}
+          PRIOR_CONSECUTIVE: ${{ needs.review.outputs.prior_consecutive }}
+          ROUND_LIMIT: ${{ needs.review.outputs.round_limit }}
         run: |
           set -euo pipefail
           p0_count=$(jq '[.findings[] | select(.severity == "P0")] | length' codex-review.json)
@@ -351,3 +399,28 @@ jobs:
             -f "commit_id=$current_head_sha" \
             -f "event=$event" \
             -f "body=$body"
+
+          # Round-limit escalation (agentic-engineering#53): PRIOR_CONSECUTIVE counts rounds BEFORE this
+          # one, so PRIOR_CONSECUTIVE >= ROUND_LIMIT plus this round also being REQUEST_CHANGES means this
+          # IS the (ROUND_LIMIT+1)th consecutive round — the loop has no convergence owner left in it, so
+          # hand off to a human with a single consolidated report instead of rendering another round.
+          if [ "$event" = "REQUEST_CHANGES" ] && [ "$PRIOR_CONSECUTIVE" -ge "$ROUND_LIMIT" ]; then
+            echo "::warning::PR #$PR_NUMBER reached $((PRIOR_CONSECUTIVE + 1)) consecutive CHANGES_REQUESTED rounds (limit $ROUND_LIMIT) — escalating to needs-human"
+
+            report=$(jq -r '.consolidated_report // empty' codex-review.json)
+            if [ -z "$report" ]; then
+              report="(codex did not produce a consolidated_report for this round; see this review and the prior rounds on this PR for full history.)"
+            fi
+            # code-review finding: this report is posted verbatim under the codex-engineer App token, and
+            # is asked to recount prior rounds' dispositions, which on this PR all begin with the literal
+            # "@claude-code-engineer" mention. address-review.yml's job predicate is a plain contains()
+            # check and codex-engineer[bot] is an allowlisted author, so a quoted excerpt would re-trigger
+            # a privileged round. Break the substring so it can never match that predicate.
+            report=${report//"@claude-code-engineer"/"[@]claude-code-engineer"}
+
+            gh api "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=needs-human"
+
+            report_body=$(printf '## Round limit reached — needs-human\n\nThis PR has reached %s consecutive CHANGES_REQUESTED reviews from codex-engineer (limit: %s). Consolidated report:\n\n%s\n' \
+              "$((PRIOR_CONSECUTIVE + 1))" "$ROUND_LIMIT" "$report")
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" -f "body=$report_body"
+          fi

@@ -28,7 +28,12 @@ The triggering comment was:
    oversight. Treat the latest review round in the filtered thread plus the triggering comment above as the
    **complete spec** for this run — the comment may narrow, clarify, or add to what the review already said.
 2. Address the findings that are genuinely right. Keep the diff scoped to what was actually flagged — no
-   unrelated cleanup, no speculative abstraction.
+   unrelated cleanup, no speculative abstraction. **Exception — architectural findings:** if a finding
+   touches routing, a trust boundary, or a cross-file invariant (a rule two or more files must stay
+   consistent with) — these three markers define "architectural" for this step — do not minimally patch
+   the cited lines. Instead, re-read every file in the affected flow and rewrite that flow so it is closed
+   under ALL known constraints, explicitly re-checking that every prior round's findings still hold after
+   your rewrite. Mechanical findings (typos, single-line factual fixes) may still be patched directly.
 3. If a finding is wrong, or acting on it would contradict the issue this PR implements, say so in a PR
    comment (this becomes review-memory context for the next round) and do not apply that specific finding —
    fix only what's genuinely right.
