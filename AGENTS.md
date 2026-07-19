@@ -129,11 +129,94 @@ itself, ships by labeling an Issue `ready`.
   capability. A `ready` label's flip by an allowlisted human/bot is itself the "explicit dispatch" the
   `ready` disposition (above) requires — there is no separate per-run naming step once the label lands.
   `address-review.yml` runs use the same escalation convention on the PR it's already working.
+  `needs-dispatcher` is distinct from `needs-senior-engineer` below: it is the implementor's own
+  self-escalation when it is stuck or sees a contradiction, never applied by the round-limit/conflict-
+  stagnation machinery, which summons the senior engineer instead.
+- **Senior-engineer leg (in-flight PR adjudication; ported from automated-researcher#438 via
+  agentic-engineering#63):** `senior-engineer.yml` is summoned by the `needs-senior-engineer` label landing
+  on a PR — by the reconciler's round-budget trip, by `review-on-pr.yml`'s own round-limit trip
+  (agentic-engineering#53's counting, reused — see submit-verdict below), by an implementor asking for
+  help, or by a human — plus `workflow_dispatch` (PR number) as the manual lever, same actor allowlist as
+  the other actuators. It runs a Fable-family agent (`claude-fable-5` — judgment-dense per model policy;
+  these events are rare so per-event premium cost is acceptable) under a dedicated
+  `senior-engineer-agent[bot]` App identity with `Contents: read`, `Pull requests: read-write`, `Issues:
+  read-write` — it can comment and label but cannot push code, by construction. Its mandate: (1) verify
+  every finding/dispute/conflict-cause EMPIRICALLY (read the code, run a one-command test) before
+  adjudicating, never by weighing prose alone; (2) at a round-limit summons, descope FIRST — identify the
+  diff slice blocking convergence, draft a follow-up-issue paragraph for it, and recommend landing the
+  remainder, rather than defaulting to "one more round"; (3) hand the implementor **exact target
+  semantics**, not finding-pointers — precise guidance converges in one push, vague pointing produces
+  regressions; (4) a dispute must cite only escape hatches/safeguards that actually exist; (5) escalate
+  anything needing instance state (pods, fleet, box) or researcher taste it can't verify — that is correct
+  behavior, not a limitation. On success it posts a guidance comment through the existing allowlisted
+  `@claude-code-engineer` mention path (re-dispatching the implementor via `address-review.yml`, whose
+  allowlist includes `senior-engineer-agent[bot]` for exactly this) and clears `needs-senior-engineer`; when
+  it escalates instead, it applies `needs-human` with a structured comment (the decision needed, the
+  options, its own lean, and what happens by default if unanswered) and stops. **Loop guard:** it never
+  dispatches more than once per label application, and if `needs-senior-engineer` REAPPEARS on the same PR
+  N=2 times (a 3rd+ total application — counted from the issue's own `labeled` event timeline), it escalates
+  straight to `needs-human` instead of running another round, since a converging guidance loop wouldn't need
+  to be re-labeled. Fails gracefully (a clear skip log line, no error) while the dedicated App and its two
+  secrets don't exist yet.
+- **Review re-fire actuator:** `review-on-pr.yml` also accepts `workflow_dispatch` (input: `pr_number`),
+  running the same authorize→review→verdict path against the PR's CURRENT head — same actor allowlist as
+  implement-on-ready's dispatch path (re-verified fresh via `gh pr view`: same-repo, bot-authored, open).
+  Useless against a still-conflicted PR (no merge ref to review); used by the reconciler below for the
+  mergeable-but-unreviewed case, and as a hand tool.
+- **Reconciler (scheduled, level-triggered; ported from automated-researcher#431/#513 via
+  agentic-engineering#63):** GitHub fires no `pull_request` run at all while a PR is unmergeable at event
+  time — the run targets `refs/pull/N/merge`, which can't be built while the PR conflicts with base. This is
+  deterministic platform behavior, not dropped events: a sibling merge lands on main, a still-open same-area
+  PR goes conflicted, and every subsequent `opened`/`synchronize` event on it produces nothing until a
+  human/dispatcher notices. `reconcile-prs.yml` triggers on every push to `main` (low-latency primary
+  detector — a sibling merge fires this within about a minute) with a ~10-minute schedule as the backstop
+  for lost events and crashed runs, and walks open bot-authored PRs to repair this itself:
+  `mergeable == CONFLICTING` → post the allowlisted `@claude-code-engineer` resolution-dispatch mention
+  (round-budgeted; escalates to `needs-senior-engineer` instead of nudging forever once the head stops
+  moving — see the senior-engineer leg above); `mergeable == MERGEABLE` with no completed codex review at
+  the current head → re-fire `review-on-pr.yml` via the actuator above (the residual true-event-loss case,
+  if one exists). It also skips any PR already carrying `needs-senior-engineer` or `needs-human` — those
+  mean another leg of the pipeline (or a person) is already handling it.
+- **Round-limit escalation now summons the senior engineer, not a human directly
+  (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
+  on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same
+  hard checks as the reconciler's own dispatch — an existing `needs-senior-engineer`/`needs-human` label
+  skips it, and the PR head must not have moved since the review was submitted). Reusing
+  agentic-engineering#53's round counting: once a PR reaches its consecutive-`CHANGES_REQUESTED` round
+  limit, the pipeline applies `needs-senior-engineer` (summoning the leg above) with the codex reviewer's
+  consolidated report attached, instead of escalating straight to `needs-human` — the adjudicator gets first
+  crack at descoping or guiding before a human is paged.
+- **Dispatcher playbook** — the operations a human/dispatcher uses to drive this pipeline day to day (each
+  mechanic is defined above; this is the consolidated at-a-glance list):
+  - Dispatch/re-dispatch an Issue: add `ready` (or remove it and re-add after ~5s so the label event
+    re-fires), or `workflow_dispatch` with the issue number.
+  - Trigger an addressing round on a PR carrying review findings: comment `@claude-code-engineer` plus
+    guidance on the PR (allowlisted authors only — see "Re-entry / retry" above).
+  - **PR gone silent (no checks/review run at all):** check `mergeable` first (`gh pr view <n> --json
+    mergeable`) — don't reach for `gh pr update-branch` on reflex, since that only helps a base-branch fix
+    that already landed. `CONFLICTING` → trigger a resolution round the same way the reconciler does
+    (comment `@claude-code-engineer` asking it to merge origin/main, resolve, and push); `MERGEABLE` with no
+    review at the current head → `gh workflow run review-on-pr.yml -f pr_number=<n>` (the actuator). The
+    scheduled reconciler normally beats a human to both within ~10 minutes; this is the manual equivalent
+    for when you don't want to wait.
+  - Unblock a `needs-senior-engineer` Issue or PR: answer the blocking question in a comment, remove
+    `needs-senior-engineer`, then re-flip `ready` (issue) or re-trigger addressing (PR) per the two bullets
+    above.
+  - Trigger a manual in-flight adjudication on a PR: `gh workflow run senior-engineer.yml -f pr_number=<n>`
+    (works with or without `needs-senior-engineer` present — the manual lever doesn't require the label).
+  - Unblock a `needs-human` PR: answer the structured question the senior engineer posted, remove
+    `needs-human`, and re-apply `needs-senior-engineer` if you want another automated adjudication pass, or
+    comment `@claude-code-engineer` directly if you already know the exact fix.
 - **Secrets this flow needs** (instance-provisioned, never checked in): `ANTHROPIC_API_KEY`,
   `OPENAI_API_KEY`, `CLAUDE_APP_ID`, `CLAUDE_APP_PRIVATE_KEY`, `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`.
   Until all six are set, `ready` events fail loudly in the Actions tab (a missing-secret error at
   token-mint) rather than silently doing something else. (On this repo, all six are already provisioned as
-  of this PR.)
+  of this PR.) The senior-engineer leg additionally needs `SENIOR_ENGINEER_APP_ID` +
+  `SENIOR_ENGINEER_APP_PRIVATE_KEY`, but by design fails gracefully (a clear skip log line) rather than
+  loudly while those two are unset, since it's an optional-until-provisioned addition to an already-working
+  pipeline, not a bring-up dependency the way the original six are. The triager's sweep leg additionally
+  needs the `CLAUDE_APP` GitHub App granted `Actions: write` (alongside its existing Issues/Contents scopes)
+  so it can dispatch a per-issue assessment run for each straggler it finds.
 - **Required-check status (as-built):** branch protection on `main` requires the `checks` status (the
   `checks.yml` Action) as a required GitHub-reported status, with `review-on-pr`'s native cross-family
   review as the required approving review — added via the owner-token maintenance path
@@ -174,12 +257,27 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`parked`** — real but deliberately not-now; revisit later. (Distinct from `wontfix` = never.)
 - **`other`** — doesn't fit the others; a recurring `other` is the signal to evolve the vocabulary.
 
-**`needs-shaping → ready` is the researcher's transition, in every lane.** An agent records the flip only on
-the back of an actual researcher conversation, and the flip must **cite it** — a comment on the issue
-summarizing/linking the shaping discussion. An agent asked to *implement* an issue never flips its disposition
-label as a step of implementing it — that would let it triage its own way in. This is a norm every lane
-follows; a lane's mechanical *enforcement* of it (e.g. a pre-flight before work starts, vs. a gate only at
-close) is that lane's own concern to build out.
+**Triager (event-driven per-ticket assessment; ported from automated-researcher#437/#497 via
+agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reopened Issue within minutes —
+two independent blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses)
+against `.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
+(`DO`/`SKIP`/`ASK`), an optional body-edit, and (for `DO`) a wave number — posted as a single idempotent
+on-ticket assessment comment, never a label or body write. A weekly backstop sweep (`schedule`) catches
+issues an event missed: it dispatches the same per-ticket assessment for every open, unlabeled-and-
+unescalated issue with no assessment comment yet, then rebuilds a rollup digest comment on the tracking
+issue (#64) listing every ticket already assessed and still awaiting a researcher decision. `needs-design`
+is retired, same as automated-researcher's own convention — there is no separate "awaiting shaping" label
+this triager introduces or resurrects; an Issue with no disposition is either fresh (about to get its
+event-driven assessment) or already carries the triager's assessment comment, in which case the citation
+below is exactly that comment.
+
+**`unlabeled → ready` (or `needs-shaping → ready`) is the researcher's transition, in every lane.** An agent
+records the flip only on the back of an actual researcher conversation, and the flip must **cite it** — a
+comment on the issue summarizing/linking the shaping discussion (the triager's assessment comment, when one
+already exists, is exactly this citation). An agent asked to *implement* an issue never flips its
+disposition label as a step of implementing it — that would let it triage its own way in. This is a norm
+every lane follows; a lane's mechanical *enforcement* of it (e.g. a pre-flight before work starts, vs. a
+gate only at close) is that lane's own concern to build out.
 
 **Invariant:** every open Issue is EITHER unlabeled (= untriaged, awaiting triage — distinct from
 `needs-shaping`) OR carries **exactly one** disposition. Enforcement flags only an Issue with two-or-more.

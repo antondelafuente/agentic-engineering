@@ -5,13 +5,28 @@ name: review-on-pr
 # or REQUEST_CHANGES (findings) review as the codex engineer bot. Human PRs and fork PRs are skipped — they
 # keep the existing manual review path. See AGENTS.md "GitHub-native SWE pipeline (BYOK)" for the trust
 # model and the P0/P1 review-guidance convention this reads from the PR's base ref.
+#
+# automated-researcher#431 / agentic-engineering#63: `pull_request` events (opened/synchronize) fire NO run
+# at all while a PR is unmergeable (GitHub can't build the refs/pull/N/merge ref to run against) —
+# deterministic platform behavior, not event loss, but it means a PR that becomes mergeable again with no
+# NEW push (e.g. a conflict resolved via a merge from main) needs an explicit re-fire since no fresh
+# `pull_request` event will ever arrive for that head. `workflow_dispatch` (input: pr_number) is that
+# actuator: same authorize->review->verdict path, run against the PR's CURRENT head. Used by
+# reconcile-prs.yml's scheduled reconciler and as a hand tool; useless against a still-conflicted PR (no
+# merge ref to review).
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to re-fire the review against (its current head)"
+        required: true
+        type: number
 
 concurrency:
-  group: review-pr-${{ github.event.pull_request.number }}
+  group: review-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
   cancel-in-progress: true
 
 permissions:
@@ -28,35 +43,113 @@ jobs:
     # automated-researcher#381: this is a job-level `if:` (evaluated before any step/shell runs), so it
     # can't share the canonical_login() shell helper; both known representations of the App identity are
     # checked explicitly instead (event-payload "<slug>[bot]" and CLI/GraphQL "app/<slug>").
-    if: >
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.pull_request.user.login == 'claude-code-engineer[bot]' ||
-        github.event.pull_request.user.login == 'app/claude-code-engineer')
+    # automated-researcher#431 / agentic-engineering#63: the workflow_dispatch branch is only a COARSE
+    # pre-filter on the triggering actor (mirrors implement-on-ready.yml) — the "Resolve PR context" step
+    # below re-verifies the target PR is same-repo, bot-authored, and open, fresh, before anything else
+    # runs. A job-level `if:` has no PR-fork/author fields to check against an arbitrary dispatch-supplied
+    # PR number.
+    if: |
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.pull_request.user.login == 'claude-code-engineer[bot]' ||
+          github.event.pull_request.user.login == 'app/claude-code-engineer'))
+      || (github.event_name == 'workflow_dispatch'
+        && contains(fromJSON('["antondelafuente","claude-code-engineer[bot]","codex-engineer[bot]","app/claude-code-engineer","app/codex-engineer"]'), github.actor))
     outputs:
-      head_sha: ${{ steps.capture.outputs.head_sha }}
+      head_sha: ${{ steps.resolve_pr.outputs.head_sha }}
+      pr_number: ${{ steps.resolve_pr.outputs.pr_number }}
       prior_consecutive: ${{ steps.history.outputs.prior_consecutive }}
       round_limit: ${{ steps.history.outputs.round_limit }}
     steps:
-      - name: Capture PR head SHA
-        id: capture
-        run: echo "head_sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+      # Checkout runs FIRST (same rationale as implement-on-ready#381/address-review#398): the resolve step
+      # below sources the canonical-login helper from the working tree, which must exist before it's
+      # sourced. A base-branch checkout is trusted content regardless of which step runs first.
+      - name: Checkout base branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout v7.0.0
+        with:
+          # Explicit ref, not the default: without it, a `pull_request` trigger checks out the PR's
+          # untrusted MERGE ref (actions/checkout's default for that event), not the base branch this
+          # comment claims -- and the resolve step below sources canonical-login.sh from this checkout,
+          # in this same job whose later "Run codex-action" step receives OPENAI_API_KEY. base.ref on
+          # `pull_request`; this workflow's own ref (its default-branch invocation) on workflow_dispatch.
+          ref: ${{ github.event.pull_request.base.ref || github.ref }}
+          persist-credentials: false
+
+      # Resolves PR_NUMBER/HEAD_SHA/BASE_SHA/BASE_REF for BOTH trigger paths. For `pull_request`, these
+      # come straight from the event payload (job-level `if:` already gated it). For `workflow_dispatch`,
+      # re-fetches the PR fresh via `gh pr view` and re-applies the SAME predicate the `pull_request` path
+      # gets for free from the event payload (same-repo, bot-authored, open) — an allowlisted actor must
+      # not be able to point this actuator at an arbitrary human or fork PR.
+      - name: Resolve PR context
+        id: resolve_pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_PR: ${{ github.event.inputs.pr_number }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          source "$GITHUB_WORKSPACE/.github/scripts/canonical-login.sh"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            PR_NUMBER="$DISPATCH_PR"
+            pr_json=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+              --json author,isCrossRepository,state,headRefOid,baseRefOid,baseRefName)
+            author=$(jq -r '.author.login' <<<"$pr_json")
+            is_cross=$(jq -r '.isCrossRepository' <<<"$pr_json")
+            state=$(jq -r '.state' <<<"$pr_json")
+            author_canon=$(canonical_login "$author")
+
+            if [ "$is_cross" != "false" ]; then
+              echo "::error::PR #$PR_NUMBER is a fork PR; refusing to re-fire review"
+              exit 1
+            fi
+            if [ "$author_canon" != "claude-code-engineer[bot]" ]; then
+              echo "::error::PR #$PR_NUMBER author '$author' is not the claude engineer bot; refusing to re-fire review"
+              exit 1
+            fi
+            if [ "$state" != "OPEN" ]; then
+              echo "::error::PR #$PR_NUMBER is not open (state: $state); refusing to re-fire review"
+              exit 1
+            fi
+
+            HEAD_SHA=$(jq -r '.headRefOid' <<<"$pr_json")
+            BASE_SHA=$(jq -r '.baseRefOid' <<<"$pr_json")
+            BASE_REF=$(jq -r '.baseRefName' <<<"$pr_json")
+          else
+            PR_NUMBER="$EVENT_PR_NUMBER"
+            HEAD_SHA="$EVENT_HEAD_SHA"
+            BASE_SHA="$EVENT_BASE_SHA"
+            BASE_REF="$EVENT_BASE_REF"
+          fi
+
+          {
+            echo "pr_number=$PR_NUMBER"
+            echo "head_sha=$HEAD_SHA"
+            echo "base_sha=$BASE_SHA"
+            echo "base_ref=$BASE_REF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout PR head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout v7.0.0
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.resolve_pr.outputs.head_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Fetch base ref
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_REF: ${{ steps.resolve_pr.outputs.base_ref }}
         run: git fetch --no-tags origin "$BASE_REF"
 
       - name: Extract review guidance from base AGENTS.md
         id: guidance
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_REF: ${{ steps.resolve_pr.outputs.base_ref }}
         run: |
           set -euo pipefail
           # Deliberately read AGENTS.md from origin/<base>, NOT the checked-out PR head: a PR that edits
@@ -71,12 +164,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Fetch prior review history
-        # GitHub-native disposition state (automated-researcher#380): prior codex review rounds + the author's issue-comment
-        # responses, so the reviewer can adjudicate rather than re-litigating findings the author already
-        # fixed or disputed. Read-only `gh api` calls against this same PR — the job's read token suffices.
-        # automated-researcher#389 review: restricted to the pipeline's own trusted identities (same
-        # allowlist as implement-on-ready.yml's ALLOWLIST) — an unrelated or adversarial review/comment must
-        # not be able to inject or crowd out disposition context.
+        # GitHub-native disposition state (automated-researcher#380): prior codex review rounds + the
+        # author's issue-comment responses, so the reviewer can adjudicate rather than re-litigating
+        # findings the author already fixed or disputed. Read-only `gh api` calls against this same PR —
+        # the job's read token suffices.
+        # automated-researcher#389 review: restricted to the pipeline's own trusted identities (originally
+        # the same allowlist as implement-on-ready.yml's ALLOWLIST; agentic-engineering#63 adds the
+        # senior-engineer shepherd, see COMMENT_ALLOW below) — an unrelated or adversarial review/comment
+        # must not be able to inject or crowd out disposition context.
         # automated-researcher#389 round 2: reviews and comments are two distinct streams and are capped
         # INDEPENDENTLY, then merged only for rendering. Capping a single merged stream let a burst of
         # trusted-but-routine comments (e.g. the automerge-status notice, owner check-ins) push actual prior
@@ -88,36 +183,48 @@ jobs:
         # notice (implement-on-ready.yml's "Auto-merge could not be enabled..." message, emitted verbatim by
         # automation with no relation to any finding) is now filtered out before capping, since it is the one
         # deterministically identifiable source of "routine noise" in this pipeline. Beyond that one known
-        # pattern, we accept as a residual risk that arbitrary free-text chatter from the two trusted
-        # identities (owner, this bot) can still occupy a slot ahead of an older genuine disposition once
-        # more than MAX_ROUNDS comments accumulate. This is deliberately best-effort, not exhaustive:
-        # (1) the comments stream is restricted to two fully-trusted, human-supervised identities by the
-        # round-1 allowlist, so this is a volume/ordering question among trusted parties, never an
-        # adversarial-injection one; (2) a keyword/regex classifier for "is this a disposition" would be
-        # brittle and risks silently dropping a genuine response phrased without its expected vocabulary,
-        # which is worse than best-effort retention; (3) the full comment thread stays visible to a human on
-        # the PR page regardless of what's fed to the reviewer; and (4) the prompt's adjudicate-not-suppress
-        # instruction means a missing disposition just causes the finding to be judged fresh again, not
-        # wrongly suppressed — the safe failure direction. MAX_ROUNDS=6 also comfortably covers this PR's own
-        # 3-round history to date. MAX_ROUNDS is a history-WINDOW size only — how much prior context gets
-        # rendered into the reviewer's prompt each round — and is independent of ROUND_LIMIT below
-        # (agentic-engineering#53), which bounds how many consecutive CHANGES_REQUESTED rounds this PR may
-        # accumulate before the pipeline escalates to a human instead of rendering another round.
+        # pattern, we accept as a residual risk that arbitrary free-text chatter from the three trusted
+        # identities (owner, this bot, the senior-engineer shepherd) can still occupy a slot ahead of an
+        # older genuine disposition once more than MAX_ROUNDS comments accumulate. This is deliberately
+        # best-effort, not exhaustive: (1) the comments stream is restricted to three fully-trusted,
+        # human-supervised identities by the round-1 allowlist, so this is a volume/ordering question among
+        # trusted parties, never an adversarial-injection one; (2) a keyword/regex classifier for "is this a
+        # disposition" would be brittle and risks silently dropping a genuine response phrased without its
+        # expected vocabulary, which is worse than best-effort retention; (3) the full comment thread stays
+        # visible to a human on the PR page regardless of what's fed to the reviewer; and (4) the prompt's
+        # adjudicate-not-suppress instruction means a missing disposition just causes the finding to be
+        # judged fresh again, not wrongly suppressed — the safe failure direction. MAX_ROUNDS=6 also
+        # comfortably covers this PR's own round history to date. MAX_ROUNDS is a history-WINDOW size only —
+        # how much prior context gets rendered into the reviewer's prompt each round — and is independent of
+        # ROUND_LIMIT below (agentic-engineering#53), which bounds how many consecutive CHANGES_REQUESTED
+        # rounds this PR may accumulate before the pipeline summons the senior-engineer adjudicator instead
+        # of rendering another round.
+        #
+        # agentic-engineering#63: `senior-engineer-agent[bot]` (the in-flight-adjudication shepherd,
+        # AGENTS.md's "Senior-engineer leg", ported from automated-researcher#438) is added to
+        # COMMENT_ALLOW below. Its rulings are the convergence mechanism's memory — automated-researcher's
+        # own history (automated-researcher PR #505) showed a reviewer that never sees the shepherd's ruling re-flags the
+        # same finding class the shepherd already settled, and the ladder escalates on a disagreement that
+        # only exists because the judge was deaf to the adjudicator. Its escalation notices ("needs-human
+        # applied..." / round-limit reached) are legitimate history too — they tell the reviewer the loop
+        # state — so only the one known auto-merge notice above stays filtered by NOISE_PREFIXES, never
+        # anything shepherd-authored.
         id: history
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ steps.resolve_pr.outputs.pr_number }}
         run: |
           set -euo pipefail
           MAX_ROUNDS=6
-          # Escalation cap (agentic-engineering#53): a PR that racks up ROUND_LIMIT consecutive
-          # CHANGES_REQUESTED reviews from codex-engineer[bot] gets `needs-human` + a consolidated report
-          # instead of a (ROUND_LIMIT+1)th round — see the count below and submit-verdict's escalation step.
+          # Escalation cap (agentic-engineering#53, senior-engineer summons added by agentic-engineering#63):
+          # a PR that racks up ROUND_LIMIT consecutive CHANGES_REQUESTED reviews from codex-engineer[bot]
+          # gets `needs-senior-engineer` + a consolidated report instead of a (ROUND_LIMIT+1)th round — see
+          # the count below and submit-verdict's auto-dispatch/escalation step.
           ROUND_LIMIT=3
           MAX_CHARS=20000
           REVIEW_ALLOW='["codex-engineer[bot]"]'
-          COMMENT_ALLOW='["antondelafuente","claude-code-engineer[bot]"]'
+          COMMENT_ALLOW='["antondelafuente","claude-code-engineer[bot]","senior-engineer-agent[bot]"]'
           # The only comment this pipeline's automation emits itself with no disposition content of its own
           # (implement-on-ready.yml's enable-automerge step, verbatim) — excluded before capping so it can
           # never occupy a slot ahead of a real prior-round response.
@@ -203,9 +310,9 @@ jobs:
         id: render_prompt
         env:
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ steps.resolve_pr.outputs.pr_number }}
+          BASE_SHA: ${{ steps.resolve_pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.resolve_pr.outputs.head_sha }}
           GUIDANCE: ${{ steps.guidance.outputs.guidance }}
           HISTORY_COUNT: ${{ steps.history.outputs.count }}
           HISTORY_NOTE: ${{ steps.history.outputs.note }}
@@ -230,21 +337,23 @@ jobs:
             history_section="This is the first review of this PR; there is no prior review history to consider."
           fi
 
-          # Round-limit heads-up (agentic-engineering#53): only non-empty once this PR is already AT the
-          # escalation cap, so a "changes_requested" verdict this round would be the (ROUND_LIMIT+1)th
-          # consecutive one and the pipeline will hand it to a human instead of looping again.
+          # Round-limit heads-up (agentic-engineering#53, senior-engineer summons added by
+          # agentic-engineering#63): only non-empty once this PR is already AT the escalation cap, so a
+          # "changes_requested" verdict this round would be the (ROUND_LIMIT+1)th consecutive one and the
+          # pipeline will summon the senior-engineer adjudicator instead of looping again.
           round_limit_section=""
           if [ "$PRIOR_CONSECUTIVE" -ge "$ROUND_LIMIT" ]; then
             round_limit_section="
 
           This PR has already received $PRIOR_CONSECUTIVE consecutive CHANGES_REQUESTED reviews from you,
           at this pipeline's $ROUND_LIMIT-round limit. If you find any P0 and your verdict is
-          \"changes_requested\" again, this round escalates to a human instead of continuing the loop. In
-          that case, ALSO fill in \"consolidated_report\": a single write-up covering (1) every finding
-          still open as of this round (P0 and P1), (2) every prior round's disposition of each finding
-          (fixed, disputed, or left unaddressed), and (3) any contradictions between those dispositions and
-          the code as it stands now — so the human gets one decision surface instead of an archaeology
-          task. Leave \"consolidated_report\" null if your verdict is \"approve\"."
+          \"changes_requested\" again, this round escalates to \`needs-senior-engineer\` (the in-flight
+          adjudicator) instead of continuing the loop. In that case, ALSO fill in \"consolidated_report\": a
+          single write-up covering (1) every finding still open as of this round (P0 and P1), (2) every
+          prior round's disposition of each finding (fixed, disputed, or left unaddressed), and (3) any
+          contradictions between those dispositions and the code as it stands now — so the adjudicator gets
+          one decision surface instead of an archaeology task. Leave \"consolidated_report\" null if your
+          verdict is \"approve\"."
           fi
 
           prompt=$(cat <<PROMPT
@@ -291,10 +400,12 @@ jobs:
           # model or effort.
           model: gpt-5.6-sol
           effort: medium
-          # The triggering actor for this pull_request run is whoever opened/pushed the PR — the claude
-          # engineer bot — and openai/codex-action denies bot actors by default (docs/security.md) even
-          # though this job's own `if:` already restricts the run to that exact identity.
-          allow-bot-users: "claude-code-engineer[bot]"
+          # The triggering actor is whoever opened/pushed the PR (pull_request) or whoever/whatever
+          # dispatched this actuator (workflow_dispatch — automated-researcher#431), and openai/codex-action
+          # denies bot actors by default (docs/security.md) even though this job's own `if:` already
+          # restricts the run to an allowlisted identity. Passing the actual triggering actor here covers
+          # both paths (a human actor is simply inert against this bot-only denylist).
+          allow-bot-users: ${{ github.actor }}
           prompt: ${{ steps.render_prompt.outputs.prompt }}
           output-file: codex-review.json
           output-schema: |
@@ -324,7 +435,7 @@ jobs:
       - name: Upload review verdict
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7.0.1
         with:
-          name: codex-review-${{ github.event.pull_request.number }}
+          name: codex-review-${{ steps.resolve_pr.outputs.pr_number }}
           path: codex-review.json
           retention-days: 1
 
@@ -340,7 +451,7 @@ jobs:
       - name: Download review verdict
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # actions/download-artifact v8.0.1
         with:
-          name: codex-review-${{ github.event.pull_request.number }}
+          name: codex-review-${{ needs.review.outputs.pr_number }}
 
       - name: Mint codex engineer App token
         id: mint_codex_token
@@ -352,39 +463,16 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Submit verdict as native review
+        id: submit_review
         env:
           GH_TOKEN: ${{ steps.mint_codex_token.outputs.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ needs.review.outputs.pr_number }}
           CAPTURED_HEAD_SHA: ${{ needs.review.outputs.head_sha }}
-          PRIOR_CONSECUTIVE: ${{ needs.review.outputs.prior_consecutive }}
-          ROUND_LIMIT: ${{ needs.review.outputs.round_limit }}
         run: |
           set -euo pipefail
           p0_count=$(jq '[.findings[] | select(.severity == "P0")] | length' codex-review.json)
           verdict=$(jq -r '.verdict // "changes_requested"' codex-review.json)
-          current_head_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')
-
-          # Re-verify the head hasn't moved since the review started (guards a `synchronize` race between
-          # review start and this approval): a stale review must never approve new, unreviewed commits.
-          #
-          # code-review finding: approving must require BOTH zero P0 findings AND the model's own
-          # `verdict` field saying "approve" -- deriving approval from p0_count alone let an
-          # internally-inconsistent result (verdict="changes_requested" with an empty/malformed
-          # findings array, or any verdict value other than the literal "approve") slip through as an
-          # APPROVE. Any inconsistency between the two signals now fails closed to REQUEST_CHANGES,
-          # never the other direction.
-          if [ "$current_head_sha" != "$CAPTURED_HEAD_SHA" ]; then
-            echo "::warning::PR head moved ($CAPTURED_HEAD_SHA -> $current_head_sha) during review — requesting changes instead of a stale approve"
-            event="REQUEST_CHANGES"
-          elif [ "$p0_count" -eq 0 ] && [ "$verdict" = "approve" ]; then
-            event="APPROVE"
-          else
-            if [ "$p0_count" -eq 0 ] && [ "$verdict" != "approve" ]; then
-              echo "::warning::codex-review.json has zero P0 findings but verdict='$verdict' (not 'approve') — requesting changes instead of trusting an inconsistent result"
-            fi
-            event="REQUEST_CHANGES"
-          fi
 
           body=$(jq -r '
             "## Codex review\n\n" +
@@ -395,17 +483,101 @@ jobs:
             end)
           ' codex-review.json)
 
+          # automated-researcher#502: this body embeds model-authored text (finding summaries/evidence)
+          # verbatim, and a later step in this same job may post a deterministic @claude-code-engineer
+          # dispatch mention to auto-trigger address-review.yml. Any occurrence of that same literal
+          # substring inside the model's own prose must never itself be a live mention -- wrapping it in an
+          # inline code span renders it visibly but GitHub does not parse mentions inside code spans, so
+          # only the deterministic dispatch step below can ever carry a live mention.
+          body="${body//@claude-code-engineer/\`@claude-code-engineer\`}"
+
+          # Re-verify the head hasn't moved, as late as possible before the mutating POST below (guards a
+          # `synchronize` race between review start and this submission): a stale review must never
+          # approve new, unreviewed commits, and must never masquerade as a genuine review OF the new head
+          # either -- codex-review.json's findings were produced against $CAPTURED_HEAD_SHA's diff, not
+          # whatever the head has moved to since. Posting stale findings as a REQUEST_CHANGES would (a)
+          # auto-dispatch address-review.yml against findings for a diff the current head may not even
+          # contain, and (b) satisfy reconcile-prs.yml's handle_mergeable "does this head already have a
+          # completed codex review" check, permanently suppressing the very re-review that would otherwise
+          # fire for it. So: skip submitting any review at all and stop -- the current head is correctly
+          # left with zero codex reviews against it, which is exactly the state reconcile-prs.yml
+          # (agentic-engineering#63 / automated-researcher#431) polls for and repairs by re-firing
+          # review-on-pr.yml's workflow_dispatch actuator.
+          current_head_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')
+          if [ "$current_head_sha" != "$CAPTURED_HEAD_SHA" ]; then
+            echo "::warning::PR head moved ($CAPTURED_HEAD_SHA -> $current_head_sha) during review — findings are for the stale head; skipping review submission so the reconciler re-fires a review against the current head instead of auto-dispatching against stale findings"
+            echo "event=STALE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # code-review finding: approving must require BOTH zero P0 findings AND the model's own
+          # `verdict` field saying "approve" -- deriving approval from p0_count alone let an
+          # internally-inconsistent result (verdict="changes_requested" with an empty/malformed
+          # findings array, or any verdict value other than the literal "approve") slip through as an
+          # APPROVE. Any inconsistency between the two signals now fails closed to REQUEST_CHANGES,
+          # never the other direction.
+          if [ "$p0_count" -eq 0 ] && [ "$verdict" = "approve" ]; then
+            event="APPROVE"
+          else
+            if [ "$p0_count" -eq 0 ] && [ "$verdict" != "approve" ]; then
+              echo "::warning::codex-review.json has zero P0 findings but verdict='$verdict' (not 'approve') — requesting changes instead of trusting an inconsistent result"
+            fi
+            event="REQUEST_CHANGES"
+          fi
+
           gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
             -f "commit_id=$current_head_sha" \
             -f "event=$event" \
             -f "body=$body"
 
-          # Round-limit escalation (agentic-engineering#53): PRIOR_CONSECUTIVE counts rounds BEFORE this
-          # one, so PRIOR_CONSECUTIVE >= ROUND_LIMIT plus this round also being REQUEST_CHANGES means this
-          # IS the (ROUND_LIMIT+1)th consecutive round — the loop has no convergence owner left in it, so
-          # hand off to a human with a single consolidated report instead of rendering another round.
-          if [ "$event" = "REQUEST_CHANGES" ] && [ "$PRIOR_CONSECUTIVE" -ge "$ROUND_LIMIT" ]; then
-            echo "::warning::PR #$PR_NUMBER reached $((PRIOR_CONSECUTIVE + 1)) consecutive CHANGES_REQUESTED rounds (limit $ROUND_LIMIT) — escalating to needs-human"
+          echo "event=$event" >> "$GITHUB_OUTPUT"
+
+      # agentic-engineering#63 (mirroring automated-researcher#502): closes the pipeline's last
+      # human-in-the-loop step on the healthy path -- an interactive session previously had to hand-post the
+      # allowlisted @claude-code-engineer mention after every CHANGES_REQUESTED round (address-review.yml's
+      # own allowlist already includes codex-engineer[bot], which is the identity this job posts as). Reuses
+      # this repo's own agentic-engineering#53 round-limit machinery (PRIOR_CONSECUTIVE/ROUND_LIMIT, computed
+      # once in the `review` job's history step above and passed through as job outputs) so auto-dispatch
+      # can never spin an unbounded loop on a stuck disagreement — it now summons `needs-senior-engineer`
+      # (the in-flight adjudicator, agentic-engineering#63) at the limit instead of escalating straight to
+      # `needs-human`, so the adjudicator gets first crack at descoping or guiding before a human is paged.
+      - name: Auto-dispatch addressing round, or escalate, on REQUEST_CHANGES
+        if: steps.submit_review.outputs.event == 'REQUEST_CHANGES'
+        env:
+          GH_TOKEN: ${{ steps.mint_codex_token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.review.outputs.pr_number }}
+          CAPTURED_HEAD_SHA: ${{ needs.review.outputs.head_sha }}
+          PRIOR_CONSECUTIVE: ${{ needs.review.outputs.prior_consecutive }}
+          ROUND_LIMIT: ${{ needs.review.outputs.round_limit }}
+        run: |
+          set -euo pipefail
+
+          # Hard gate (mirroring automated-researcher#502 point 3): an escalation label already parked this
+          # PR with the senior-engineer leg or a human -- the automated loop must never post another
+          # dispatch mention or duplicate escalation on top of that, regardless of round count.
+          labels=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          case ",$labels," in
+            *,needs-senior-engineer,*) echo "PR #$PR_NUMBER: needs-senior-engineer already set; skipping auto-dispatch/escalation"; exit 0 ;;
+            *,needs-human,*) echo "PR #$PR_NUMBER: needs-human already set; skipping auto-dispatch/escalation"; exit 0 ;;
+          esac
+
+          # automated-researcher#505 review round 2/3: the freshness check in the submission step above only
+          # guards up to the moment of that POST -- a push landing in the gap between that POST succeeding
+          # and this step starting (however small) would otherwise still dispatch/escalate against a head
+          # the review's findings no longer describe. Re-verify immediately before doing anything mutating,
+          # with the labels gate already done so no API call sits between this fetch and the mutations
+          # below. A moved head here means a new `synchronize` run for the true current head already owns
+          # (or will own) the dispatch decision, so skip rather than duplicate/contradict it.
+          current_head_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')
+          if [ "$current_head_sha" != "$CAPTURED_HEAD_SHA" ]; then
+            echo "PR #$PR_NUMBER: head moved ($CAPTURED_HEAD_SHA -> $current_head_sha) since the review was submitted; skipping -- the synchronize run for the current head owns this decision"
+            exit 0
+          fi
+
+          round=$((PRIOR_CONSECUTIVE + 1))
+          if [ "$round" -gt "$ROUND_LIMIT" ]; then
+            echo "PR #$PR_NUMBER: $round consecutive CHANGES_REQUESTED reviews (limit $ROUND_LIMIT); escalating to needs-senior-engineer instead of auto-dispatching"
 
             report=$(jq -r '.consolidated_report // empty' codex-review.json)
             if [ -z "$report" ]; then
@@ -418,9 +590,15 @@ jobs:
             # a privileged round. Break the substring so it can never match that predicate.
             report=${report//"@claude-code-engineer"/"[@]claude-code-engineer"}
 
-            gh api "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=needs-human"
+            # Label mutation before the comment (not after): needs-senior-engineer landing is what actually
+            # summons senior-engineer.yml, so it must exist even if the comment POST below then fails --
+            # the adjudicator can reconstruct the report itself from the review + PR history either way.
+            gh api "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=needs-senior-engineer"
 
-            report_body=$(printf '## Round limit reached — needs-human\n\nThis PR has reached %s consecutive CHANGES_REQUESTED reviews from codex-engineer (limit: %s). Consolidated report:\n\n%s\n' \
-              "$((PRIOR_CONSECUTIVE + 1))" "$ROUND_LIMIT" "$report")
+            report_body=$(printf '## Round limit reached — needs-senior-engineer\n\nThis PR has reached %s consecutive CHANGES_REQUESTED reviews from codex-engineer (limit: %s). Escalating for in-flight adjudication rather than continuing to auto-dispatch. Consolidated report:\n\n%s\n' \
+              "$round" "$ROUND_LIMIT" "$report")
             gh api "repos/$REPO/issues/$PR_NUMBER/comments" -f "body=$report_body"
+          else
+            echo "PR #$PR_NUMBER: dispatching addressing round $round/$ROUND_LIMIT"
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review loop: auto-dispatch round $round/$ROUND_LIMIT. @claude-code-engineer the Codex review above requested changes -- please address the findings and push."
           fi
