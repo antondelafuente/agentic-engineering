@@ -149,14 +149,18 @@ jobs:
               # labeled event here would never actually fire the adjudicator (agentic-engineering#65 round
               # 5, P0). Its `workflow_dispatch` input (pr_number) is the reliable summon for a
               # merge-ref-less PR; dispatch it directly with this same token (CODEX_APP's Actions:write,
-              # already documented in AGENTS.md for this job's review-actuator re-fire below). Dispatch
-              # BEFORE adding the label and bail without labeling on failure (agentic-engineering#65 round
-              # 6 sync, antondelafuente/automated-researcher#525 round 1): this reconciler already skips
-              # any PR already carrying needs-senior-engineer on later ticks (see the top-level skip
-              # below), so labeling first and having the dispatch fail afterward would permanently strand
-              # the PR -- labeled, but with no adjudication run and no further reconciler tick ever
-              # retrying it.
-              if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n"; then
+              # already documented in AGENTS.md for this job's review-actuator re-fire below). The
+              # `summoned_by=reconciler` input marks this as a real summons for senior-engineer.yml's own
+              # loop guard: that guard counts `labeled` events plus any workflow_dispatch carrying this
+              # marker, so repeated conflicted-PR escalations still trip the 3rd-application escalation to
+              # needs-human instead of bypassing it the way a bare dispatch does (agentic-engineering#65
+              # round 7, P0). Dispatch BEFORE adding the label and bail without labeling on failure
+              # (agentic-engineering#65 round 6 sync, antondelafuente/automated-researcher#525 round 1):
+              # this reconciler already skips any PR already carrying needs-senior-engineer on later ticks
+              # (see the top-level skip below), so labeling first and having the dispatch fail afterward
+              # would permanently strand the PR -- labeled, but with no adjudication run and no further
+              # reconciler tick ever retrying it.
+              if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
                 echo "::warning::PR #$n: workflow_dispatch of senior-engineer.yml failed; not labeling this tick so the next tick retries"
                 return 1
               fi

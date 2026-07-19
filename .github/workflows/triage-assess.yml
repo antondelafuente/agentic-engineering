@@ -127,8 +127,8 @@ permissions:
   issues: read
 
 env:
-  # Fixed rollup destination (agentic-engineering#64, this repo's tracking issue — mirrors automated-
-  # researcher#414's role there).
+  # Fixed rollup destination (agentic-engineering#64, this repo's tracking issue — mirrors
+  # antondelafuente/automated-researcher#414's role there).
   DIGEST_ISSUE: 64
   # First line of every posted assessment comment — used identically to detect "already assessed" (gather's
   # straggler exclusion and the rollup's awaiting-action scan) and to find-or-edit the comment in post-results.

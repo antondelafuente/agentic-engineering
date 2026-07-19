@@ -43,8 +43,10 @@ unlabeled-and-unescalated issue with no assessment comment yet, regardless of th
 dispatches each through the same per-ticket path; that dispatched run classifies the ticket's own author
 (and every comment author) against the pipeline's allowlist and, for a non-allowlisted one, runs the
 assess/adjudicate jobs with **no repository checkout and no tools beyond producing the structured
-verdict** — the rubric and ticket packet are embedded directly into the prompt text instead, so no untrusted
-body ever reaches a job holding `ANTHROPIC_API_KEY` or repo access. A capability-reduced `DO` verdict has its
+verdict** — the rubric and ticket packet are embedded directly into the prompt text instead. The model call
+still runs under `ANTHROPIC_API_KEY` (that's how it's invoked at all) — the safeguard is capability removal,
+not key removal: with no checkout and no tool-execution surface, an untrusted body can influence only the
+verdict text the job produces, never read repo files or run commands. A capability-reduced `DO` verdict has its
 wave mechanically forced to the ticket's own issue number (it has no repo access to check file-footprint
 disjointness against another ticket, so it serializes rather than risks a silent batch). The sweep then
 rebuilds a rollup digest comment on the tracking issue (#64) listing every ticket already assessed and still

@@ -158,11 +158,13 @@ itself, ships by labeling an Issue `ready`.
   allowlist includes `senior-engineer-agent[bot]` for exactly this) and clears `needs-senior-engineer`; when
   it escalates instead, it applies `needs-human` with a structured comment (the decision needed, the
   options, its own lean, and what happens by default if unanswered) and stops. **Loop guard:** it never
-  dispatches more than once per label application, and if `needs-senior-engineer` REAPPEARS on the same PR
-  N=2 times (a 3rd+ total application — counted from the issue's own `labeled` event timeline), it escalates
-  straight to `needs-human` instead of running another round, since a converging guidance loop wouldn't need
-  to be re-labeled. Fails gracefully (a clear skip log line, no error) while the dedicated App and its two
-  secrets don't exist yet.
+  dispatches more than once per `needs-senior-engineer` summons, and if a summons REAPPEARS on the same PR
+  N=2 times (a 3rd+ total summons), it escalates straight to `needs-human` instead of running another round,
+  since a converging guidance loop wouldn't need to be re-summoned. A summons is either a `labeled` event for
+  this exact label (counted from the issue's own `labeled` event timeline) or a `workflow_dispatch` carrying
+  the reconciler's `summoned_by` marker (see the reconciler below) — a bare, unmarked `workflow_dispatch` is
+  the manual human lever and stays exempt from the guard. Fails gracefully (a clear skip log line, no error)
+  while the dedicated App and its two secrets don't exist yet.
 - **Review re-fire actuator:** `review-on-pr.yml` also accepts `workflow_dispatch` (input: `pr_number`),
   running the same authorize→review→verdict path against the PR's CURRENT head — same actor allowlist as
   implement-on-ready's dispatch path (re-verified fresh via `gh pr view`: same-repo, bot-authored, open).
@@ -183,9 +185,11 @@ itself, ships by labeling an Issue `ready`.
   if one exists). It also skips any PR already carrying `needs-senior-engineer`, `needs-human`, or
   `needs-dispatcher` — those mean another leg of the pipeline (or a person) is already handling it. The
   round-limit escalation applies the `needs-senior-engineer` label AND directly dispatches
-  `senior-engineer.yml` via its `workflow_dispatch` actuator (input: `pr_number`) — a still-CONFLICTING PR
-  has no mergeable ref, so GitHub creates no `pull_request` run for that workflow's `labeled` trigger to
-  catch, and the label alone would silently strand the escalation with no adjudication ever starting.
+  `senior-engineer.yml` via its `workflow_dispatch` actuator (inputs: `pr_number`, `summoned_by=reconciler`)
+  — a still-CONFLICTING PR has no mergeable ref, so GitHub creates no `pull_request` run for that workflow's
+  `labeled` trigger to catch, and the label alone would silently strand the escalation with no adjudication
+  ever starting. The `summoned_by` marker is what lets senior-engineer.yml's own loop guard (above) count
+  this dispatch as a summons rather than exempting it the way a bare human `workflow_dispatch` is exempted.
 - **Round-limit escalation now summons the senior engineer, not a human directly
   (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
   on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same
@@ -241,7 +245,11 @@ Cross-repo issue/PR references are fully qualified (`owner/repo#N` or a full URL
 written — commits, PRs, docs, and chat — never a bare `#N`. A bare `#N` auto-links against whatever repo
 happens to be rendering it, not the repo the writer meant, and silently resolves to the wrong Issue or 404s.
 (This repo's own DISPOSITIONS block once carried exactly this failure — a `#49` meant for a different repo,
-fixed below.)
+fixed below.) A same-repo bare ref in `automated-researcher` becomes exactly this cross-repo hazard the
+moment it's copied into this repo unqualified — so every port/resync from `automated-researcher` must
+include a ref-qualification pass (prefixing every bare ref with `antondelafuente/`, including forms split
+across a line wrap) over the files it touched, before it's considered done; this class has re-imported
+itself on more than one sync already (agentic-engineering#65 rounds 4 and 7).
 
 <!-- DISPOSITIONS:START -->
 ## Issue tracker — dispositions
@@ -288,8 +296,10 @@ unlabeled-and-unescalated issue with no assessment comment yet, regardless of th
 dispatches each through the same per-ticket path; that dispatched run classifies the ticket's own author
 (and every comment author) against the pipeline's allowlist and, for a non-allowlisted one, runs the
 assess/adjudicate jobs with **no repository checkout and no tools beyond producing the structured
-verdict** — the rubric and ticket packet are embedded directly into the prompt text instead, so no untrusted
-body ever reaches a job holding `ANTHROPIC_API_KEY` or repo access. A capability-reduced `DO` verdict has its
+verdict** — the rubric and ticket packet are embedded directly into the prompt text instead. The model call
+still runs under `ANTHROPIC_API_KEY` (that's how it's invoked at all) — the safeguard is capability removal,
+not key removal: with no checkout and no tool-execution surface, an untrusted body can influence only the
+verdict text the job produces, never read repo files or run commands. A capability-reduced `DO` verdict has its
 wave mechanically forced to the ticket's own issue number (it has no repo access to check file-footprint
 disjointness against another ticket, so it serializes rather than risks a silent batch). The sweep then
 rebuilds a rollup digest comment on the tracking issue (#64) listing every ticket already assessed and still

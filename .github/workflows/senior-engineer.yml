@@ -29,6 +29,10 @@ on:
         description: "PR number to run senior-engineer adjudication against (its current head)"
         required: true
         type: number
+      summoned_by:
+        description: "Set by an automated dispatcher (e.g. reconcile-prs.yml) that also applies needs-senior-engineer for this same summons, so the loop guard below counts this dispatch as an application. Leave unset for a bare human/manual dispatch, which stays exempt from the loop guard."
+        required: false
+        type: string
 
 concurrency:
   group: senior-engineer-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
@@ -130,14 +134,22 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # Loop guard: the senior engineer must never dispatch more than once per `needs-senior-engineer`
-      # application, and if the label REAPPEARS N=2 times on one PR (i.e. this is its 3rd+ application), the
+      # SUMMONS, and if a summons REAPPEARS N=2 times on one PR (i.e. this is its 3rd+ summons), the
       # guidance loop isn't converging -- escalate straight to needs-human instead of running another
-      # adjudication round. Counts `labeled` events for this exact label via the issue's own event timeline
-      # (ambient read-only token is sufficient -- this is a read). Only meaningful for the labeled path; a
-      # workflow_dispatch run isn't a label (re-)application at all.
+      # adjudication round. A summons is either a `labeled` event for this exact label, or a
+      # `workflow_dispatch` carrying the `summoned_by` marker (set by an automated dispatcher, e.g.
+      # reconcile-prs.yml's conflicted-PR escalation, which also applies the label itself -- see that
+      # workflow's `handle_conflicted`). Counting only `labeled` events would miss those: GitHub creates no
+      # `pull_request` run for a still-CONFLICTING PR's label application at all (agentic-engineering#65
+      # round 5), so that dispatch would otherwise never pass through this guard (agentic-engineering#65
+      # round 7, P0). The count query itself still counts `labeled` events via the issue's own event
+      # timeline (ambient read-only token is sufficient -- this is a read) -- the label mutation those
+      # marked dispatches perform already lands in that same timeline regardless of what triggered the
+      # currently-running workflow, so no separate dispatch-counting mechanism is needed. A BARE
+      # workflow_dispatch (no `summoned_by`) is the manual human lever and stays exempt, same as before.
       - name: Loop guard — count needs-senior-engineer applications
         id: loop_guard
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name == 'pull_request' || github.event.inputs.summoned_by != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -248,7 +260,7 @@ jobs:
       # full cross-actor picture (the codex reviewer's findings, the researcher's own input, the
       # implementor's responses/disputes, and its own prior guidance on a repeat summons), not just the
       # reviewer's verdicts plus the implementor's own words. Everything else is dropped and logged (audit
-      # evidence in the run log), never reaching the model. automated-researcher#520 independently closed the
+      # evidence in the run log), never reaching the model. antondelafuente/automated-researcher#520 independently closed the
       # same class upstream via a workflow-assembled snapshot; this repo's own fix (below) predates that PR
       # and is kept as the mechanism here rather than swapped for its bash-loop rendering, since it already
       # matches this repo's own address-review.yml convention.
