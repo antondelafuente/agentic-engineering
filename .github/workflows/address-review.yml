@@ -109,7 +109,7 @@ jobs:
           COMMENT_ALLOW='["antondelafuente","claude-code-engineer[bot]"]'
 
           # agentic-engineering#66: a long-lived PR's full review/comment JSON is thread-scale and can
-          # exceed ARG_MAX (observed on PR #65's 12-round thread: "jq: Argument list too long", exit 126)
+          # exceed ARG_MAX (observed on agentic-engineering#65's 12-round thread: "jq: Argument list too long", exit 126)
           # when handed to jq via --arg/--argjson. Every jq call below reads thread-scale data from a file
           # (either as jq's own positional file-arg or via --slurpfile) instead of a shell variable on the
           # command line; only the small fixed allowlists still go through --argjson.
