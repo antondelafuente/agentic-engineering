@@ -154,17 +154,23 @@ jobs:
               # loop guard: that guard counts `labeled` events plus any workflow_dispatch carrying this
               # marker, so repeated conflicted-PR escalations still trip the 3rd-application escalation to
               # needs-human instead of bypassing it the way a bare dispatch does (agentic-engineering#65
-              # round 7, P0). Dispatch BEFORE adding the label and bail without labeling on failure
-              # (agentic-engineering#65 round 6 sync, antondelafuente/automated-researcher#525 round 1):
-              # this reconciler already skips any PR already carrying needs-senior-engineer on later ticks
-              # (see the top-level skip below), so labeling first and having the dispatch fail afterward
-              # would permanently strand the PR -- labeled, but with no adjudication run and no further
-              # reconciler tick ever retrying it.
-              if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
-                echo "::warning::PR #$n: workflow_dispatch of senior-engineer.yml failed; not labeling this tick so the next tick retries"
+              # round 7, P0). Label BEFORE dispatching, everywhere this pipeline pairs a label with a
+              # dispatch of the same summons: the label is the durable summons record the loop guard
+              # counts, the dispatch is only transport, so the dispatch must observe a fully-recorded
+              # state rather than race a run that starts before the label lands (agentic-engineering#65
+              # round 8, P0 -- supersedes round 6's dispatch-first ordering). To keep round 6's
+              # anti-strand guarantee, roll the label back if the dispatch itself then fails: this
+              # reconciler skips any PR already carrying needs-senior-engineer on later ticks (see the
+              # top-level skip below), so a labeled-but-undispatched PR would otherwise never be retried.
+              if ! gh pr edit "$n" --repo "$REPO" --add-label needs-senior-engineer; then
+                echo "::warning::PR #$n: failed to add needs-senior-engineer label; not dispatching this tick so the next tick retries"
                 return 1
               fi
-              gh pr edit "$n" --repo "$REPO" --add-label needs-senior-engineer
+              if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
+                echo "::warning::PR #$n: labeled needs-senior-engineer but workflow_dispatch of senior-engineer.yml failed; removing the label so the next tick retries"
+                gh pr edit "$n" --repo "$REPO" --remove-label needs-senior-engineer
+                return 1
+              fi
               return
             fi
 
