@@ -168,7 +168,13 @@ jobs:
               fi
               if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
                 echo "::warning::PR #$n: labeled needs-senior-engineer but workflow_dispatch of senior-engineer.yml failed; removing the label so the next tick retries"
-                gh pr edit "$n" --repo "$REPO" --remove-label needs-senior-engineer
+                # Rollback is a best-effort optimization, not a correctness requirement: this whole
+                # path is idempotently retried by the next scheduled sweep (see the recovery-model
+                # note in AGENTS.md's reconciler section), so a failed removal here just means this
+                # PR stays labeled until a later sweep re-evaluates its full state from scratch.
+                if ! gh pr edit "$n" --repo "$REPO" --remove-label needs-senior-engineer; then
+                  echo "::warning::PR #$n: failed to remove needs-senior-engineer label after a failed dispatch; will self-heal on a later sweep"
+                fi
                 return 1
               fi
               return

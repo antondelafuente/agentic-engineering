@@ -190,6 +190,16 @@ itself, ships by labeling an Issue `ready`.
   `labeled` trigger to catch, and the label alone would silently strand the escalation with no adjudication
   ever starting. The `summoned_by` marker is what lets senior-engineer.yml's own loop guard (above) count
   this dispatch as a summons rather than exempting it the way a bare human `workflow_dispatch` is exempted.
+  **Recovery model for this conflicted-PR path (agentic-engineering#65 round 9):** every leg of it —
+  label, dispatch, and rollback-on-dispatch-failure — is idempotently retried by the next scheduled sweep,
+  since the sweep re-evaluates each PR's full state (label, `mergeable`, head SHA) from scratch on every
+  run rather than trusting anything it did last time. A stranded label, a failed `workflow_dispatch`, or a
+  failed label rollback are therefore all self-healing within one ~10-minute cron interval, not permanent
+  strandings. Per-call rollback perfection is deliberately not the design goal here; the sweep is the
+  designed recovery mechanism, and a transient API failure surviving for one cron interval is an accepted
+  residual, not a bug. Findings against deeper per-call failure branches of this path (e.g. the rollback
+  call itself failing) are dispositioned by this recorded boundary rather than chased with further
+  per-call error handling.
 - **Round-limit escalation now summons the senior engineer, not a human directly
   (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
   on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same
