@@ -248,7 +248,10 @@ jobs:
       # full cross-actor picture (the codex reviewer's findings, the researcher's own input, the
       # implementor's responses/disputes, and its own prior guidance on a repeat summons), not just the
       # reviewer's verdicts plus the implementor's own words. Everything else is dropped and logged (audit
-      # evidence in the run log), never reaching the model.
+      # evidence in the run log), never reaching the model. automated-researcher#520 independently closed the
+      # same class upstream via a workflow-assembled snapshot; this repo's own fix (below) predates that PR
+      # and is kept as the mechanism here rather than swapped for its bash-loop rendering, since it already
+      # matches this repo's own address-review.yml convention.
       - name: Fetch + filter PR thread
         id: pr_thread
         env:
@@ -327,6 +330,12 @@ jobs:
           PR_THREAD: ${{ steps.pr_thread.outputs.thread }}
         run: |
           set -euo pipefail
+          # patsub_replacement is on by default on bash 5.2+ (this runner's bash, antondelafuente/automated-researcher#520):
+          # it makes `&` in the replacement word expand to the matched pattern and gives backslash special
+          # meaning, so any `&`/`\` in $PR_THREAD (freeform authored text) would corrupt the substitution
+          # below. Disabling it restores the pre-5.2 behavior where the replacement word is inserted
+          # literally.
+          shopt -u patsub_replacement
           body="$(cat .github/prompts/senior-engineer.md)"
           body="${body//\{\{PR_NUMBER\}\}/$PR_NUMBER}"
           body="${body//\{\{REPO\}\}/$REPO}"

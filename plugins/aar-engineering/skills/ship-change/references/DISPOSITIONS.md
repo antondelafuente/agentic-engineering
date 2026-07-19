@@ -26,32 +26,33 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`other`** — doesn't fit the others; a recurring `other` is the signal to evolve the vocabulary.
 
 **Triager (event-driven per-ticket assessment; ported from antondelafuente/automated-researcher#437/antondelafuente/automated-researcher#497 via
-agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reopened Issue **from an
-allowlisted sender** (the researcher or one of the two engineer bots) within minutes — two independent
-blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses) against
-`.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
+agentic-engineering#63, capability-reduction pattern from antondelafuente/automated-researcher#523 via
+agentic-engineering#65 round 6 sync):** `triage-assess.yml` assesses every newly opened/reopened Issue
+**from an allowlisted sender** (the researcher or one of the two engineer bots) within minutes — two
+independent blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses)
+against `.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
 (`DO`/`SKIP`/`ASK`), an optional body-edit, and (for `DO`) a provisional wave guess based on this ticket's
 own expected footprint — posted as a single idempotent on-ticket assessment comment, never a label or body
 write. Assessment is strictly per-ticket (one issue per run, never a batch), so this wave guess cannot be
 compared against any other open DO ticket; actual wave/serialization composition across tickets is a
 researcher judgment made at flip time, not an automated output. This repo is public, so an Issue filed or
 reopened by anyone else does NOT get this event-driven pass (it would otherwise let an outside filer trigger
-paid model calls for free). A weekly backstop sweep (`schedule`) catches genuinely event-missed stragglers —
-but its own straggler predicate ALSO requires an allowlisted ticket author (agentic-engineering#65 round 5,
-P0): a non-allowlisted-author filing therefore gets machine-assessed by **neither** path, since the sweep is
-the only remaining route such a ticket's body/comments could reach the assess/adjudicate jobs, which hold
-`ANTHROPIC_API_KEY` and unrestricted `Read`. This is a deliberate, TEMPORARY parity deviation — the
-capability-reduction pattern for safely assessing outsider tickets is designed and in flight upstream
-(antondelafuente/automated-researcher#523); once it lands, it ports here and this exclusion lifts. Until
-then, a non-allowlisted-author ticket simply waits for the researcher's manual eye, acceptable for a repo
-with ~zero outsider filings. For an allowlisted-author straggler, the sweep dispatches the same per-ticket
-assessment for every open, unlabeled-and-unescalated issue with no assessment comment yet, then rebuilds a
-rollup digest comment on the tracking issue (#64) listing every ticket already assessed and still awaiting a
-researcher decision. `needs-design`
+paid model calls for free) — such an Issue is instead picked up by the weekly backstop sweep (`schedule`),
+just on the sweep's own cadence instead of within minutes. The sweep gathers every open,
+unlabeled-and-unescalated issue with no assessment comment yet, regardless of the ticket's own author, and
+dispatches each through the same per-ticket path; that dispatched run classifies the ticket's own author
+(and every comment author) against the pipeline's allowlist and, for a non-allowlisted one, runs the
+assess/adjudicate jobs with **no repository checkout and no tools beyond producing the structured
+verdict** — the rubric and ticket packet are embedded directly into the prompt text instead, so no untrusted
+body ever reaches a job holding `ANTHROPIC_API_KEY` or repo access. A capability-reduced `DO` verdict has its
+wave mechanically forced to the ticket's own issue number (it has no repo access to check file-footprint
+disjointness against another ticket, so it serializes rather than risks a silent batch). The sweep then
+rebuilds a rollup digest comment on the tracking issue (#64) listing every ticket already assessed and still
+awaiting a researcher decision. `needs-design`
 is retired, same as automated-researcher's own convention — there is no separate "awaiting shaping" label
 this triager introduces or resurrects; an Issue with no disposition is either fresh (about to get its
-event-driven assessment) or already carries the triager's assessment comment, in which case the citation
-below is exactly that comment.
+event-driven assessment, or awaiting the backstop sweep if filed by a non-allowlisted sender) or already
+carries the triager's assessment comment, in which case the citation below is exactly that comment.
 
 **`unlabeled → ready` (or `needs-shaping → ready`) is the researcher's transition, in every lane.** An agent
 records the flip only on the back of an actual researcher conversation, and the flip must **cite it** — a
