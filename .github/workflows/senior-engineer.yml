@@ -30,7 +30,7 @@ on:
         required: true
         type: number
       summoned_by:
-        description: "Set by an automated dispatcher (e.g. reconcile-prs.yml) that also applies needs-senior-engineer for this same summons, so the loop guard below counts this dispatch as an application. Leave unset for a bare human/manual dispatch, which stays exempt from the loop guard."
+        description: "Set by an automated dispatcher (e.g. reconcile-prs.yml) that also applies needs-senior-engineer for this same summons, so the loop guard below runs against this dispatch instead of exempting it (the guard itself counts adjudication comments, not this marker). Leave unset for a bare human/manual dispatch, which stays exempt from the loop guard."
         required: false
         type: string
 
@@ -133,21 +133,29 @@ jobs:
             echo "base_ref=$(jq -r '.baseRefName' <<<"$pr_json")"
           } >> "$GITHUB_OUTPUT"
 
-      # Loop guard: the senior engineer must never dispatch more than once per `needs-senior-engineer`
-      # SUMMONS, and if a summons REAPPEARS N=2 times on one PR (i.e. this is its 3rd+ summons), the
-      # guidance loop isn't converging -- escalate straight to needs-human instead of running another
-      # adjudication round. A summons is either a `labeled` event for this exact label, or a
-      # `workflow_dispatch` carrying the `summoned_by` marker (set by an automated dispatcher, e.g.
-      # reconcile-prs.yml's conflicted-PR escalation, which also applies the label itself -- see that
-      # workflow's `handle_conflicted`). Counting only `labeled` events would miss those: GitHub creates no
-      # `pull_request` run for a still-CONFLICTING PR's label application at all (agentic-engineering#65
-      # round 5), so that dispatch would otherwise never pass through this guard (agentic-engineering#65
-      # round 7, P0). The count query itself still counts `labeled` events via the issue's own event
-      # timeline (ambient read-only token is sufficient -- this is a read) -- the label mutation those
-      # marked dispatches perform already lands in that same timeline regardless of what triggered the
-      # currently-running workflow, so no separate dispatch-counting mechanism is needed. A BARE
-      # workflow_dispatch (no `summoned_by`) is the manual human lever and stays exempt, same as before.
-      - name: Loop guard — count needs-senior-engineer applications
+      # Loop guard: the senior engineer must never run more than once per `needs-senior-engineer` SUMMONS,
+      # and if a summons REAPPEARS N=2 times on one PR without converging (i.e. this would be its 3rd+
+      # summons), escalate straight to needs-human instead of running another adjudication round.
+      #
+      # Counted by ADJUDICATION COMMENT, not label-application timeline event (agentic-engineering#65 round
+      # 10 -- supersedes rounds 7-9's label-event counting and their recorded recovery-model boundary, which
+      # the round-10 review correctly refuted). The label was doing double duty as both the escalation state
+      # AND the summons counter: the reconciler's sweep has to treat a present label as "already being
+      # handled" and skip it (or it would double-dispatch), which means a labeled-but-never-adjudicated PR
+      # (a failed dispatch, a failed rollback) could never be retried -- permanently stranded. Splitting the
+      # two signals apart fixes both sides at once: a `senior-engineer-agent[bot]` comment is direct evidence
+      # a summons actually RAN (the CLI only posts one after completing); a transport failure (failed
+      # dispatch, failed label add/remove) never produces one, so it can no longer consume budget here, and
+      # label churn from retries becomes harmless bookkeeping the reconciler is free to re-drive (see that
+      # workflow's conditional needs-senior-engineer skip).
+      #
+      # The count resets at the more recent of: the last codex-engineer[bot] APPROVED review (real forward
+      # progress -- whatever drove prior summonses is resolved), or the last `needs-human` clearance (a
+      # person deliberately granted the automated loop a fresh start). It does NOT reset on
+      # needs-senior-engineer's own routine clearing (the "guided" outcome below clears that label on every
+      # non-escalated run) -- resetting there would zero the count on every single cycle and the guard could
+      # never trip.
+      - name: Loop guard — count senior-engineer adjudication comments
         id: loop_guard
         if: github.event_name == 'pull_request' || github.event.inputs.summoned_by != ''
         env:
@@ -156,11 +164,28 @@ jobs:
           PR_NUMBER: ${{ steps.resolve_pr.outputs.pr_number }}
         run: |
           set -euo pipefail
-          count=$(gh api "repos/$REPO/issues/$PR_NUMBER/events" --paginate | jq -s '
-            add // [] | map(select(.event == "labeled" and .label.name == "needs-senior-engineer")) | length
+
+          last_approved_ts=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s -r '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            add // [] | map(select(.state == "APPROVED" and ((.user.login | canon_login) == "codex-engineer[bot]")))
+              | sort_by(.submitted_at) | last | .submitted_at // ""
           ')
-          echo "needs-senior-engineer has been applied $count time(s) (including this one) on PR #$PR_NUMBER"
-          if [ "$count" -ge 3 ]; then
+          last_human_clear_ts=$(gh api "repos/$REPO/issues/$PR_NUMBER/events" --paginate | jq -s -r '
+            add // [] | map(select(.event == "unlabeled" and .label.name == "needs-human"))
+              | sort_by(.created_at) | last | .created_at // ""
+          ')
+          reset_ts="$last_approved_ts"
+          if [[ "$last_human_clear_ts" > "$reset_ts" ]]; then
+            reset_ts="$last_human_clear_ts"
+          fi
+
+          prior_count=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg reset "$reset_ts" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            add // [] | map(select(((.user.login | canon_login) == "senior-engineer-agent[bot]") and (.created_at > $reset))) | length
+          ')
+          count=$((prior_count + 1))
+          echo "senior-engineer has posted $prior_count adjudication comment(s) on PR #$PR_NUMBER since ${reset_ts:-the PR opened}; this run would be summons #$count"
+          if [ "$prior_count" -ge 2 ]; then
             trip="true"
           else
             trip="false"
@@ -214,7 +239,7 @@ jobs:
           # same decision/options/lean/default shape regardless of which path escalated it
           # (agentic-engineering#65 round 3, P1).
           body=$(printf '%s\n\n**Decision needed:** %s\n\n**Options:** %s\n\n**Lean:** %s\n\n**Default if unanswered:** %s\n' \
-            "Senior engineer: \`needs-senior-engineer\` has been applied to this PR $LOOP_COUNT times (the 2-reappearance loop guard) without the underlying issue resolving. Escalating to \`needs-human\` instead of running another adjudication round — repeated re-labeling without progress means the automated guidance loop isn't converging and needs a person's judgment on what's actually stuck." \
+            "Senior engineer: this would be adjudication summons #$LOOP_COUNT on this PR (the 2-reappearance loop guard, counted by adjudication comment) without the underlying issue resolving. Escalating to \`needs-human\` instead of running another adjudication round — repeated summonses without progress means the automated guidance loop isn't converging and needs a person's judgment on what's actually stuck." \
             "whether to keep pushing this PR through automated adjudication rounds, or to have a person take over — resolve the disagreement directly, descope the blocking slice into a follow-up issue, or make another product-taste call the automation can't verify on its own." \
             "(a) a person reviews the PR's history and posts the guidance/decision that lets the loop converge; (b) a person identifies the blocking diff slice and files it as a follow-up issue, then lands the remainder; (c) a person closes or otherwise redirects the PR if it's no longer the right shape." \
             "without a person's judgment on what specifically is stuck, this workflow cannot pick between (a)/(b)/(c) itself — that is exactly why the loop guard hands off here instead of running a third-plus adjudication round." \

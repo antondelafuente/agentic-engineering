@@ -157,14 +157,21 @@ itself, ships by labeling an Issue `ready`.
   `@claude-code-engineer` mention path (re-dispatching the implementor via `address-review.yml`, whose
   allowlist includes `senior-engineer-agent[bot]` for exactly this) and clears `needs-senior-engineer`; when
   it escalates instead, it applies `needs-human` with a structured comment (the decision needed, the
-  options, its own lean, and what happens by default if unanswered) and stops. **Loop guard:** it never
-  dispatches more than once per `needs-senior-engineer` summons, and if a summons REAPPEARS on the same PR
-  N=2 times (a 3rd+ total summons), it escalates straight to `needs-human` instead of running another round,
-  since a converging guidance loop wouldn't need to be re-summoned. A summons is either a `labeled` event for
-  this exact label (counted from the issue's own `labeled` event timeline) or a `workflow_dispatch` carrying
-  the reconciler's `summoned_by` marker (see the reconciler below) — a bare, unmarked `workflow_dispatch` is
-  the manual human lever and stays exempt from the guard. Fails gracefully (a clear skip log line, no error)
-  while the dedicated App and its two secrets don't exist yet.
+  options, its own lean, and what happens by default if unanswered) and stops. **Loop guard
+  (agentic-engineering#65 round 10):** it never dispatches more than once per `needs-senior-engineer`
+  summons, and if a summons REAPPEARS on the same PR N=2 times (a 3rd+ total summons), it escalates straight
+  to `needs-human` instead of running another round, since a converging guidance loop wouldn't need to be
+  re-summoned. The count is by **adjudication comment**, not label-application timeline event: it counts
+  `senior-engineer-agent[bot]` comments posted since the more recent of the last codex-engineer[bot]
+  `APPROVED` review (real forward progress) or the last `needs-human` clearance (a person deliberately
+  granting a fresh start) — not since needs-senior-engineer's own routine clearing, which happens on every
+  non-escalated run and would zero the count every cycle. A `workflow_dispatch` carrying the reconciler's
+  `summoned_by` marker (see the reconciler below) runs the guard the same as a `labeled` event does; a bare,
+  unmarked `workflow_dispatch` is the manual human lever and stays exempt. Counting comments rather than
+  labels is what makes the reconciler's label add/remove/re-dispatch churn around a stranded summons (below)
+  harmless bookkeeping instead of budget consumption: a transport failure never produces an adjudication
+  comment, so it can never count as a summons here. Fails gracefully (a clear skip log line, no error) while
+  the dedicated App and its two secrets don't exist yet.
 - **Review re-fire actuator:** `review-on-pr.yml` also accepts `workflow_dispatch` (input: `pr_number`),
   running the same authorize→review→verdict path against the PR's CURRENT head — same actor allowlist as
   implement-on-ready's dispatch path (re-verified fresh via `gh pr view`: same-repo, bot-authored, open).
@@ -182,24 +189,29 @@ itself, ships by labeling an Issue `ready`.
   (round-budgeted; escalates to `needs-senior-engineer` instead of nudging forever once the head stops
   moving — see the senior-engineer leg above); `mergeable == MERGEABLE` with no completed codex review at
   the current head → re-fire `review-on-pr.yml` via the actuator above (the residual true-event-loss case,
-  if one exists). It also skips any PR already carrying `needs-senior-engineer`, `needs-human`, or
-  `needs-dispatcher` — those mean another leg of the pipeline (or a person) is already handling it. The
+  if one exists). It also skips any PR already carrying `needs-human` or `needs-dispatcher` unconditionally —
+  those mean a person, or the implementor's own self-escalation, is already the thing to unblock. The
   round-limit escalation applies the `needs-senior-engineer` label AND directly dispatches
   `senior-engineer.yml` via its `workflow_dispatch` actuator (inputs: `pr_number`, `summoned_by=reconciler`)
   — a still-CONFLICTING PR has no mergeable ref, so GitHub creates no `pull_request` run for that workflow's
   `labeled` trigger to catch, and the label alone would silently strand the escalation with no adjudication
-  ever starting. The `summoned_by` marker is what lets senior-engineer.yml's own loop guard (above) count
-  this dispatch as a summons rather than exempting it the way a bare human `workflow_dispatch` is exempted.
-  **Recovery model for this conflicted-PR path (agentic-engineering#65 round 9):** every leg of it —
-  label, dispatch, and rollback-on-dispatch-failure — is idempotently retried by the next scheduled sweep,
-  since the sweep re-evaluates each PR's full state (label, `mergeable`, head SHA) from scratch on every
-  run rather than trusting anything it did last time. A stranded label, a failed `workflow_dispatch`, or a
-  failed label rollback are therefore all self-healing within one ~10-minute cron interval, not permanent
-  strandings. Per-call rollback perfection is deliberately not the design goal here; the sweep is the
-  designed recovery mechanism, and a transient API failure surviving for one cron interval is an accepted
-  residual, not a bug. Findings against deeper per-call failure branches of this path (e.g. the rollback
-  call itself failing) are dispositioned by this recorded boundary rather than chased with further
-  per-call error handling.
+  ever starting. The `summoned_by` marker is what lets senior-engineer.yml's own loop guard (above) run
+  against this dispatch rather than exempting it the way a bare human `workflow_dispatch` is exempted.
+  **Recovery model for this conflicted-PR path (agentic-engineering#65 round 10 — supersedes round 9's
+  recorded boundary, which the round-10 review correctly refuted: the sweep skipped every
+  `needs-senior-engineer` PR unconditionally, so a stranded label was never actually re-evaluated by a later
+  sweep):** `needs-senior-engineer` is a **conditional** skip, not unconditional. On a PR carrying the
+  label, the sweep checks whether a `senior-engineer-agent[bot]` comment postdates the label's most recent
+  application — if so, a summons is genuinely in flight or just completed, and it skips. If not, and the
+  label's most recent application is older than the sweep's own grace window (`SENIOR_ENGINEER_GRACE_SECONDS`,
+  comfortably above senior-engineer.yml's 30-minute CLI timeout), the sweep re-dispatches
+  `senior-engineer.yml` itself (`summoned_by=reconciler`) rather than leaving the PR stranded — this is what
+  actually retries a PR whose dispatch or label rollback both failed, instead of merely asserting that a
+  later sweep would. This retry cannot inflate senior-engineer.yml's own loop-guard budget: that guard now
+  counts adjudication comments, not label events (see the loop guard above), and a transport failure never
+  produces one. Per-call rollback perfection is still not the design goal for the label mutations
+  themselves — a failed add/remove is logged and left for this same conditional-skip-and-re-dispatch check
+  to repair on the next tick, not chased with deeper per-call error handling.
 - **Round-limit escalation now summons the senior engineer, not a human directly
   (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
   on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same

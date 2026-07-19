@@ -87,6 +87,11 @@ jobs:
           # SAME head is treated as still in flight rather than re-dispatched or counted as a fresh round.
           CONFLICT_GRACE_SECONDS=$((55 * 60))
           REVIEW_GRACE_SECONDS=$((30 * 60))
+          # Comfortably above senior-engineer.yml's own 30-minute CLI timeout: a stranded needs-senior-engineer
+          # label (its dispatch or its rollback failed -- agentic-engineering#65 rounds 9-10) is left alone
+          # for at least this long before this sweep re-dispatches it, so a summons that is still genuinely
+          # running isn't raced.
+          SENIOR_ENGINEER_GRACE_SECONDS=$((45 * 60))
           now_epoch=$(date -u +%s)
 
           # Lazy-mergeability retry (antondelafuente/automated-researcher#513): right after a push, GitHub's mergeability
@@ -151,29 +156,26 @@ jobs:
               # merge-ref-less PR; dispatch it directly with this same token (CODEX_APP's Actions:write,
               # already documented in AGENTS.md for this job's review-actuator re-fire below). The
               # `summoned_by=reconciler` input marks this as a real summons for senior-engineer.yml's own
-              # loop guard: that guard counts `labeled` events plus any workflow_dispatch carrying this
-              # marker, so repeated conflicted-PR escalations still trip the 3rd-application escalation to
-              # needs-human instead of bypassing it the way a bare dispatch does (agentic-engineering#65
-              # round 7, P0). Label BEFORE dispatching, everywhere this pipeline pairs a label with a
-              # dispatch of the same summons: the label is the durable summons record the loop guard
-              # counts, the dispatch is only transport, so the dispatch must observe a fully-recorded
-              # state rather than race a run that starts before the label lands (agentic-engineering#65
-              # round 8, P0 -- supersedes round 6's dispatch-first ordering). To keep round 6's
-              # anti-strand guarantee, roll the label back if the dispatch itself then fails: this
-              # reconciler skips any PR already carrying needs-senior-engineer on later ticks (see the
-              # top-level skip below), so a labeled-but-undispatched PR would otherwise never be retried.
+              # loop guard to run against, rather than being exempted the way a bare dispatch is
+              # (agentic-engineering#65 round 7, P0); the guard itself now counts adjudication comments, not
+              # this marker or the label (round 10). Label BEFORE dispatching, everywhere this pipeline pairs
+              # a label with a dispatch of the same summons: the label is this run's visible state marker,
+              # so the dispatch should observe it already recorded rather than race a run that starts before
+              # the label lands (agentic-engineering#65 round 8, P0 -- supersedes round 6's dispatch-first
+              # ordering). Roll the label back on a best-effort basis if the dispatch itself then fails; a
+              # failed rollback is not chased further here -- a needs-senior-engineer label with no
+              # newer adjudication comment past its grace window is re-dispatched by this sweep's own
+              # conditional skip (see handle_stranded_senior_engineer above), so neither a failed dispatch
+              # nor a failed rollback strands this PR (agentic-engineering#65 round 10, resolving rounds
+              # 9-10's P0/P1).
               if ! gh pr edit "$n" --repo "$REPO" --add-label needs-senior-engineer; then
                 echo "::warning::PR #$n: failed to add needs-senior-engineer label; not dispatching this tick so the next tick retries"
                 return 1
               fi
               if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
                 echo "::warning::PR #$n: labeled needs-senior-engineer but workflow_dispatch of senior-engineer.yml failed; removing the label so the next tick retries"
-                # Rollback is a best-effort optimization, not a correctness requirement: this whole
-                # path is idempotently retried by the next scheduled sweep (see the recovery-model
-                # note in AGENTS.md's reconciler section), so a failed removal here just means this
-                # PR stays labeled until a later sweep re-evaluates its full state from scratch.
                 if ! gh pr edit "$n" --repo "$REPO" --remove-label needs-senior-engineer; then
-                  echo "::warning::PR #$n: failed to remove needs-senior-engineer label after a failed dispatch; will self-heal on a later sweep"
+                  echo "::warning::PR #$n: failed to remove needs-senior-engineer label after a failed dispatch; the label stays present and this sweep's own conditional skip re-dispatches it once its grace window elapses"
                 fi
                 return 1
               fi
@@ -234,6 +236,57 @@ jobs:
             gh pr comment "$n" --repo "$REPO" --body "$REVIEW_MARKER (head $short)." >/dev/null
           }
 
+          # A present needs-senior-engineer label means either a summons is genuinely in flight/just
+          # completed, or a prior dispatch/rollback silently failed and stranded the label
+          # (agentic-engineering#65 rounds 9-10). senior-engineer.yml's loop guard now counts ADJUDICATION
+          # COMMENTS, not label-application timeline events (same PR, round 10), which is what makes
+          # re-dispatching here safe: a transport failure never produces an adjudication comment, so a retry
+          # from this sweep can never inflate that guard's budget -- only a real completed summons can.
+          handle_stranded_senior_engineer() {
+            local n="$1"
+
+            local label_ts
+            if ! label_ts=$(gh api "repos/$REPO/issues/$n/events" --paginate | jq -s -r '
+              add // [] | map(select(.event == "labeled" and .label.name == "needs-senior-engineer"))
+                | sort_by(.created_at) | last | .created_at // empty
+            '); then
+              echo "::warning::PR #$n: reading needs-senior-engineer label history failed; skipping this tick"
+              return 1
+            fi
+            if [ -z "$label_ts" ]; then
+              echo "PR #$n: needs-senior-engineer set but no labeling event found in history; skipping this tick"
+              return
+            fi
+
+            local comment_ts
+            if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s '
+              def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+              add // [] | map(select((.user.login | canon_login) == "senior-engineer-agent[bot]"))
+                | sort_by(.created_at) | last | .created_at // empty
+            '); then
+              echo "::warning::PR #$n: reading senior-engineer comment history failed; skipping this tick"
+              return 1
+            fi
+
+            if [ -n "$comment_ts" ] && [[ "$comment_ts" > "$label_ts" ]]; then
+              echo "PR #$n: needs-senior-engineer set, but a senior-engineer-agent comment ($comment_ts) postdates the current label application ($label_ts); a summons is genuinely in flight or just completed, skipping"
+              return
+            fi
+
+            local elapsed
+            elapsed=$(( now_epoch - $(date -u -d "$label_ts" +%s) ))
+            if [ "$elapsed" -lt "$SENIOR_ENGINEER_GRACE_SECONDS" ]; then
+              echo "PR #$n: needs-senior-engineer applied ${elapsed}s ago with no adjudication comment since; within grace window, skipping this tick"
+              return
+            fi
+
+            echo "PR #$n: needs-senior-engineer applied ${elapsed}s ago with no adjudication comment since -- summons likely never ran (dispatch or rollback failure); re-dispatching"
+            if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
+              echo "::warning::PR #$n: re-dispatch of stranded needs-senior-engineer summons failed; will retry next tick"
+              return 1
+            fi
+          }
+
           # A plain `mapfile -t arr < <(cmd)` does NOT propagate cmd's exit status through `set -e` (process
           # substitution failures are invisible to the parent shell's error trap) -- a failing `gh pr list`
           # would silently look like "zero open PRs" and this tick would exit 0 having reconciled nothing
@@ -265,17 +318,25 @@ jobs:
               continue
             fi
 
-            # needs-senior-engineer/needs-human mean the in-flight judgment layer is already working this
-            # PR or has already escalated it to a person -- the reconciler must not pile a duplicate
-            # resolution-dispatch round on top of that. needs-dispatcher is this repo's own escalation
-            # label (AGENTS.md's escalation section): the implementor already self-escalated as blocked or
-            # contradicted, and the reconciler must not re-dispatch/re-escalate over that either.
+            # needs-human means a person has already been paged for this PR -- the reconciler must not pile
+            # a duplicate resolution-dispatch round on top of that. needs-dispatcher is this repo's own
+            # escalation label (AGENTS.md's escalation section): the implementor already self-escalated as
+            # blocked or contradicted, and the reconciler must not re-dispatch/re-escalate over that either.
             labels=$(jq -r '[.labels[].name] | join(",")' <<<"$pr")
             case ",$labels," in
-              *,needs-senior-engineer,*) echo "PR #$n: needs-senior-engineer already set, skipping"; continue ;;
               *,needs-human,*) echo "PR #$n: needs-human already set, skipping"; continue ;;
               *,needs-dispatcher,*) echo "PR #$n: needs-dispatcher already set, skipping"; continue ;;
             esac
+
+            # needs-senior-engineer is CONDITIONAL, not an unconditional skip (agentic-engineering#65 round
+            # 10): a present label alone doesn't prove a summons is actually running -- see
+            # handle_stranded_senior_engineer above for the adjudication-comment check and re-dispatch.
+            if [[ ",$labels," == *,needs-senior-engineer,* ]]; then
+              if ! handle_stranded_senior_engineer "$n"; then
+                echo "::warning::PR #$n: needs-senior-engineer stranded-check failed this tick"
+              fi
+              continue
+            fi
 
             mergeable=$(jq -r '.mergeable' <<<"$pr")
             head_sha=$(jq -r '.headRefOid' <<<"$pr")
