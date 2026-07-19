@@ -8,7 +8,8 @@ name: triage-assess
 #   - A scheduled weekly BACKSTOP SWEEP catches event-missed stragglers — open issues that are
 #     unlabeled-and-unescalated per AGENTS.md's disposition lifecycle (carry NO disposition label at all:
 #     `ready`, `needs-shaping`, `blocked`, `parked`, `other`; and no escalation label: `needs-human`,
-#     `needs-senior-engineer`, `needs-dispatcher`), and carry NO assessment comment yet. Per antondelafuente/automated-researcher#501's review round, the
+#     `needs-senior-engineer`, `needs-dispatcher`), carry NO assessment comment yet, AND have an ALLOWLISTED
+#     author (agentic-engineering#65 round 5, P0 — see the author-allowlist note further down). Per antondelafuente/automated-researcher#501's review round, the
 #     sweep does NOT assess these stragglers itself: it only dispatches, for each one, the SAME per-issue path
 #     a single `issues` event would take (`workflow_dispatch` with `issue_number` set), using the minted
 #     claude-engineer App token so the dispatched run's own actor is `claude-code-engineer[bot]` — an
@@ -51,9 +52,18 @@ name: triage-assess
 # Every entry path is actor-gated to the same allowlist every other actuator in this pipeline uses
 # (researcher + the two engineer bots, both App-identity representations). This repo is public (AGENTS.md),
 # so `issues: opened/reopened` fires on ANY GitHub user's issue — without this gate, an outside filer could
-# trigger paid model calls and a bot-authored comment on their own issue for free. An issue filed by anyone
-# else still gets picked up by the backstop sweep, just on the sweep's own (non-attacker-controlled) cadence
-# instead of within minutes.
+# trigger paid model calls and a bot-authored comment on their own issue for free.
+#
+# A non-allowlisted-author issue does NOT reach the backstop sweep either (agentic-engineering#65 round 5,
+# P0): the sweep's straggler predicate requires the ticket's OWN author to be on that same allowlist. The
+# sweep is the only remaining path an outsider-authored ticket could otherwise reach the assess/adjudicate
+# jobs below, which hold ANTHROPIC_API_KEY and unrestricted Read — parity with automated-researcher's own
+# (equally exposed) sweep is not a mitigation for machinery this port newly introduces here. This is a
+# deliberate, TEMPORARY parity deviation: the capability-reduction pattern for safely assessing outsider
+# tickets is designed and in flight upstream (antondelafuente/automated-researcher#523); once it lands, it
+# ports here and this exclusion lifts. Until then, a non-allowlisted-author ticket simply waits for the
+# researcher's manual eye instead of being machine-assessed at all — acceptable for a repo with ~zero
+# outsider filings.
 #
 # Concurrency is per-issue: bulk filings assess in parallel, keyed by issue number; the sweep uses its own
 # single group so it doesn't race a concurrent sweep, but never blocks on (or is blocked by) any per-issue
@@ -193,7 +203,7 @@ jobs:
             echo "ticket_count=$ticket_count" >> "$GITHUB_OUTPUT"
           else
             if ! gh issue list --repo "$REPO" --state open \
-                --json number,title,labels,comments --limit 300 > /tmp/raw_issues.json; then
+                --json number,title,labels,comments,author --limit 300 > /tmp/raw_issues.json; then
               echo "::error::gh issue list failed"
               exit 1
             fi
@@ -214,9 +224,25 @@ jobs:
             # `blocked` and `parked` are real, deliberate dispositions (a decided-but-gated ticket, or a
             # deliberately-not-now one) -- reassessing them contradicts that decision, so they're excluded
             # here rather than left to the no-marker-comment clause below to filter out eventually.
+            #
+            # Author allowlist (agentic-engineering#65 round 5, P0): this repo is public, and the sweep is
+            # the ONLY path a non-allowlisted-sender ticket ever reaches (the `issues` event gate above
+            # already excludes them) -- so an unfiltered sweep would be the one route by which arbitrary
+            # outsider-authored issue bodies/comments reach the assess/adjudicate jobs below, which hold
+            # ANTHROPIC_API_KEY and unrestricted Read. This is a deliberate, TEMPORARY parity deviation from
+            # automated-researcher's own sweep (which has the same exposure today): the capability-reduction
+            # pattern for safely assessing outsider tickets is designed and in flight upstream
+            # (antondelafuente/automated-researcher#523); once it lands, it ports here and this exclusion
+            # lifts. Until then, a non-allowlisted-author ticket simply waits for the researcher's manual
+            # eye instead of being machine-assessed -- acceptable for a repo with ~zero outsider filings.
+            # Same allowlist as the `issues` event gate above (`gather` job's own `if:`), applied to the
+            # ticket's OWN author here rather than an event sender (the sweep has no event/sender to check).
             stragglers=$(jq -c --arg marker "$ASSESSMENT_MARKER_PREFIX" '
               def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
               [ .[] | select(
+                  (.author.login // "" | canon_login) as $a
+                  | $a == "antondelafuente" or $a == "claude-code-engineer[bot]" or $a == "codex-engineer[bot]"
+                ) | select(
                   (.labels | map(.name) | any(. == "ready" or . == "blocked" or . == "parked" or . == "other"
                     or . == "needs-human" or . == "needs-senior-engineer" or . == "needs-dispatcher"
                     or . == "needs-shaping")) | not

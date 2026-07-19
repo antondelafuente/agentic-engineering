@@ -12,7 +12,9 @@ name: reconcile-prs
 #     and push -- which fires `synchronize` on the now-buildable merge ref). Round-budgeted: escalates to
 #     `needs-senior-engineer` instead of nudging forever if the head never moves (the in-flight judgment
 #     layer looks closer at why plain resolution-dispatch isn't landing and hands exact guidance, or
-#     escalates to `needs-human` itself if it can't).
+#     escalates to `needs-human` itself if it can't). The label alone would never summon it here -- a
+#     conflicted PR has no mergeable ref, so GitHub fires no `pull_request` run for senior-engineer.yml's
+#     `labeled` trigger to catch -- so this reconciler also dispatches it directly via `workflow_dispatch`.
 #   - `mergeable == MERGEABLE` but the head has no completed codex review yet: re-fire review-on-pr.yml via
 #     its `workflow_dispatch` actuator (the residual true-event-loss case, if one exists).
 # See AGENTS.md "GitHub-native SWE pipeline (BYOK)" for the full trust model this implements.
@@ -143,6 +145,17 @@ jobs:
               echo "PR #$n: conflicted with no progress after $((round - 1)) reconciler dispatch(es); escalating to needs-senior-engineer"
               gh pr comment "$n" --repo "$REPO" --body "Reconciler: PR has stayed conflicted with main across $((round - 1)) resolution-dispatch round(s) with no new commit landing (still at head $short). Escalating to \`needs-senior-engineer\` rather than continuing to nudge."
               gh pr edit "$n" --repo "$REPO" --add-label needs-senior-engineer
+              # The label above is for state visibility only: senior-engineer.yml's only event trigger is
+              # `pull_request: labeled`, and GitHub creates no `pull_request` run against a still-CONFLICTING
+              # PR (no mergeable ref exists to build), so a labeled event here would never actually fire the
+              # adjudicator (agentic-engineering#65 round 5, P0). Its `workflow_dispatch` input (pr_number)
+              # is the reliable summon for a merge-ref-less PR; dispatch it directly with this same token
+              # (CODEX_APP's Actions:write, already documented in AGENTS.md for this job's review-actuator
+              # re-fire below).
+              if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n"; then
+                echo "::error::PR #$n: needs-senior-engineer label applied but workflow_dispatch summon of senior-engineer.yml failed -- adjudication will not start until it is manually re-dispatched (gh workflow run senior-engineer.yml -f pr_number=$n)"
+                return 1
+              fi
               return
             fi
 

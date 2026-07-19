@@ -178,7 +178,11 @@ itself, ships by labeling an Issue `ready`.
   moving — see the senior-engineer leg above); `mergeable == MERGEABLE` with no completed codex review at
   the current head → re-fire `review-on-pr.yml` via the actuator above (the residual true-event-loss case,
   if one exists). It also skips any PR already carrying `needs-senior-engineer`, `needs-human`, or
-  `needs-dispatcher` — those mean another leg of the pipeline (or a person) is already handling it.
+  `needs-dispatcher` — those mean another leg of the pipeline (or a person) is already handling it. The
+  round-limit escalation applies the `needs-senior-engineer` label AND directly dispatches
+  `senior-engineer.yml` via its `workflow_dispatch` actuator (input: `pr_number`) — a still-CONFLICTING PR
+  has no mergeable ref, so GitHub creates no `pull_request` run for that workflow's `labeled` trigger to
+  catch, and the label alone would silently strand the escalation with no adjudication ever starting.
 - **Round-limit escalation now summons the senior engineer, not a human directly
   (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
   on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same
@@ -220,7 +224,9 @@ itself, ships by labeling an Issue `ready`.
   write` granted to a GitHub App: the triager's sweep leg needs it on `CLAUDE_APP` (alongside its existing
   Issues/Contents scopes) to dispatch a per-issue assessment run for each straggler it finds, and the
   reconciler needs it on `CODEX_APP` to re-fire `review-on-pr.yml` via `workflow_dispatch` for a mergeable-
-  but-unreviewed head (`reconcile-prs.yml`'s `handle_mergeable`).
+  but-unreviewed head (`reconcile-prs.yml`'s `handle_mergeable`), and — same token, same scope — to summon
+  `senior-engineer.yml` via `workflow_dispatch` at its own round-limit escalation on a still-CONFLICTING PR
+  (`handle_conflicted`), since that PR's `labeled` event can never fire a `pull_request` run to catch it.
 - **Required-check status (as-built):** branch protection on `main` requires the `checks` status (the
   `checks.yml` Action) as a required GitHub-reported status, with `review-on-pr`'s native cross-family
   review as the required approving review — added via the owner-token maintenance path
@@ -272,12 +278,18 @@ write. Assessment is strictly per-ticket (one issue per run, never a batch), so 
 compared against any other open DO ticket; actual wave/serialization composition across tickets is a
 researcher judgment made at flip time, not an automated output. This repo is public, so an Issue filed or
 reopened by anyone else does NOT get this event-driven pass (it would otherwise let an outside filer trigger
-paid model calls for free) — it is instead picked up by the weekly backstop sweep below, on that sweep's own
-cadence rather than within minutes. A weekly backstop sweep (`schedule`) catches issues an event missed —
-both genuinely event-missed stragglers and every non-allowlisted-sender filing, which always lands here
-first: it dispatches the same per-ticket assessment for every open, unlabeled-and-unescalated issue with no
-assessment comment yet, then rebuilds a rollup digest comment on the tracking issue (#64) listing every
-ticket already assessed and still awaiting a researcher decision. `needs-design`
+paid model calls for free). A weekly backstop sweep (`schedule`) catches genuinely event-missed stragglers —
+but its own straggler predicate ALSO requires an allowlisted ticket author (agentic-engineering#65 round 5,
+P0): a non-allowlisted-author filing therefore gets machine-assessed by **neither** path, since the sweep is
+the only remaining route such a ticket's body/comments could reach the assess/adjudicate jobs, which hold
+`ANTHROPIC_API_KEY` and unrestricted `Read`. This is a deliberate, TEMPORARY parity deviation — the
+capability-reduction pattern for safely assessing outsider tickets is designed and in flight upstream
+(antondelafuente/automated-researcher#523); once it lands, it ports here and this exclusion lifts. Until
+then, a non-allowlisted-author ticket simply waits for the researcher's manual eye, acceptable for a repo
+with ~zero outsider filings. For an allowlisted-author straggler, the sweep dispatches the same per-ticket
+assessment for every open, unlabeled-and-unescalated issue with no assessment comment yet, then rebuilds a
+rollup digest comment on the tracking issue (#64) listing every ticket already assessed and still awaiting a
+researcher decision. `needs-design`
 is retired, same as automated-researcher's own convention — there is no separate "awaiting shaping" label
 this triager introduces or resurrects; an Issue with no disposition is either fresh (about to get its
 event-driven assessment) or already carries the triager's assessment comment, in which case the citation

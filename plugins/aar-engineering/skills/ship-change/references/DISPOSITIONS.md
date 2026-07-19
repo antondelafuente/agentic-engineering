@@ -36,12 +36,18 @@ write. Assessment is strictly per-ticket (one issue per run, never a batch), so 
 compared against any other open DO ticket; actual wave/serialization composition across tickets is a
 researcher judgment made at flip time, not an automated output. This repo is public, so an Issue filed or
 reopened by anyone else does NOT get this event-driven pass (it would otherwise let an outside filer trigger
-paid model calls for free) — it is instead picked up by the weekly backstop sweep below, on that sweep's own
-cadence rather than within minutes. A weekly backstop sweep (`schedule`) catches issues an event missed —
-both genuinely event-missed stragglers and every non-allowlisted-sender filing, which always lands here
-first: it dispatches the same per-ticket assessment for every open, unlabeled-and-unescalated issue with no
-assessment comment yet, then rebuilds a rollup digest comment on the tracking issue (#64) listing every
-ticket already assessed and still awaiting a researcher decision. `needs-design`
+paid model calls for free). A weekly backstop sweep (`schedule`) catches genuinely event-missed stragglers —
+but its own straggler predicate ALSO requires an allowlisted ticket author (agentic-engineering#65 round 5,
+P0): a non-allowlisted-author filing therefore gets machine-assessed by **neither** path, since the sweep is
+the only remaining route such a ticket's body/comments could reach the assess/adjudicate jobs, which hold
+`ANTHROPIC_API_KEY` and unrestricted `Read`. This is a deliberate, TEMPORARY parity deviation — the
+capability-reduction pattern for safely assessing outsider tickets is designed and in flight upstream
+(antondelafuente/automated-researcher#523); once it lands, it ports here and this exclusion lifts. Until
+then, a non-allowlisted-author ticket simply waits for the researcher's manual eye, acceptable for a repo
+with ~zero outsider filings. For an allowlisted-author straggler, the sweep dispatches the same per-ticket
+assessment for every open, unlabeled-and-unescalated issue with no assessment comment yet, then rebuilds a
+rollup digest comment on the tracking issue (#64) listing every ticket already assessed and still awaiting a
+researcher decision. `needs-design`
 is retired, same as automated-researcher's own convention — there is no separate "awaiting shaping" label
 this triager introduces or resurrects; an Issue with no disposition is either fresh (about to get its
 event-driven assessment) or already carries the triager's assessment comment, in which case the citation
