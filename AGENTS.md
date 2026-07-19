@@ -33,7 +33,7 @@ native approval. A crashed/garbled review never reads as clean.
 ## GitHub-native SWE pipeline (BYOK) — event-driven `ready` → merged PR
 
 For this repo (and `automated-researcher`, where this capability shipped first — see
-automated-researcher#378 / this repo's own agentic-engineering#43), the `ship-change` lifecycle above can run **without a
+antondelafuente/automated-researcher#378 / this repo's own agentic-engineering#43), the `ship-change` lifecycle above can run **without a
 session dispatching it**: a `ready` label launches an execution-tier Claude implementor via GitHub Actions,
 and PR events run the cross-family Codex review natively. This section is this repo's own copy of that
 capability — it is what this PR (agentic-engineering#44) adds, and it is deliberately the **last** change to this repo shipped
@@ -81,10 +81,15 @@ itself, ships by labeling an Issue `ready`.
     fresh re-verification against live state before any token is minted. The same allowlist also gates
     *content*, not just triggering: `implement-on-ready.yml` and `address-review.yml` each snapshot and
     filter the issue/PR comment thread (and, for `address-review.yml`, the PR's reviews) to allowlisted
-    authors only before rendering the implementor's prompt, dropping and logging anything else
-    (agentic-engineering#52) — a non-allowlisted account's comment or review never becomes part of what the
-    model treats as spec, even if it's technically readable via the model's own `gh`/API access during the
-    run.
+    authors only before rendering the implementor's prompt; `senior-engineer.yml` does the same for the PR's
+    reviews and comment thread it hands its adjudicator, with `senior-engineer-agent[bot]` additionally in
+    its own allowlist (it may be adjudicating a repeat summons and needs its own prior guidance in view).
+    Anything dropped is logged (agentic-engineering#52, agentic-engineering#65) — a non-allowlisted account's
+    comment or review never becomes part of what the model treats as spec, even if it's technically readable
+    via the model's own `gh`/API access during the run. `triage-assess.yml` can't use this same content-filter
+    pattern — the whole point of the triager is to READ the filed ticket's own text — so it applies
+    capability reduction instead: a non-allowlisted-author ticket's assess/adjudicate jobs get no repository
+    checkout and no tools beyond producing the structured verdict (see the "Triager" section below).
   - **Accepted residual risk, re-justified for public:** the implementor agent executes repo-controlled code
     (tests, hooks) while holding its API key and a short-lived write-scoped GitHub token. The allowlist
     predicate above is what makes this acceptable on a *public* repo: it ensures only allowlisted-authored
@@ -95,7 +100,7 @@ itself, ships by labeling an Issue `ready`.
     content — privacy did no work in the original private-repo statement once traced through; the allowlist
     does. `checks.yml`'s required-status job carries the same residual risk on the same basis: it passes the
     `ANTHROPIC_API_KEY` repo secret to `.aar-ci/checks.sh` (read-only `GITHUB_TOKEN`, no write permissions)
-    so `fake_home_smoke.sh` can run `claude plugin` headlessly on a GitHub runner (automated-researcher#396).
+    so `fake_home_smoke.sh` can run `claude plugin` headlessly on a GitHub runner (antondelafuente/automated-researcher#396).
 - **Concurrency is per-issue dedup, not a worker pool.** `implement-on-ready.yml`'s
   `concurrency: group: implement-issue-<n>` only prevents a duplicate run on the *same* issue. There is
   **no global cap** — GitHub Actions `concurrency` groups don't provide one. The spend guard is the
@@ -129,11 +134,137 @@ itself, ships by labeling an Issue `ready`.
   capability. A `ready` label's flip by an allowlisted human/bot is itself the "explicit dispatch" the
   `ready` disposition (above) requires — there is no separate per-run naming step once the label lands.
   `address-review.yml` runs use the same escalation convention on the PR it's already working.
+  `needs-dispatcher` is distinct from `needs-senior-engineer` below: it is the implementor's own
+  self-escalation when it is stuck or sees a contradiction, never applied by the round-limit/conflict-
+  stagnation machinery, which summons the senior engineer instead.
+- **Senior-engineer leg (in-flight PR adjudication; ported from antondelafuente/automated-researcher#438 via
+  agentic-engineering#63):** `senior-engineer.yml` is summoned by the `needs-senior-engineer` label landing
+  on a PR — by the reconciler's round-budget trip, by `review-on-pr.yml`'s own round-limit trip
+  (agentic-engineering#53's counting, reused — see submit-verdict below), by an implementor asking for
+  help, or by a human — plus `workflow_dispatch` (PR number) as the manual lever, same actor allowlist as
+  the other actuators. It runs a Fable-family agent (`claude-fable-5` — judgment-dense per model policy;
+  these events are rare so per-event premium cost is acceptable) under a dedicated
+  `senior-engineer-agent[bot]` App identity with `Contents: read`, `Pull requests: read-write`, `Issues:
+  read-write` — it can comment and label but cannot push code, by construction. Its mandate: (1) verify
+  every finding/dispute/conflict-cause EMPIRICALLY (read the code, run a one-command test) before
+  adjudicating, never by weighing prose alone; (2) at a round-limit summons, descope FIRST — identify the
+  diff slice blocking convergence, draft a follow-up-issue paragraph for it, and recommend landing the
+  remainder, rather than defaulting to "one more round"; (3) hand the implementor **exact target
+  semantics**, not finding-pointers — precise guidance converges in one push, vague pointing produces
+  regressions; (4) a dispute must cite only escape hatches/safeguards that actually exist; (5) escalate
+  anything needing instance state (pods, fleet, box) or researcher taste it can't verify — that is correct
+  behavior, not a limitation. On success it posts a guidance comment through the existing allowlisted
+  `@claude-code-engineer` mention path (re-dispatching the implementor via `address-review.yml`, whose
+  allowlist includes `senior-engineer-agent[bot]` for exactly this) and clears `needs-senior-engineer`; when
+  it escalates instead, it applies `needs-human` with a structured comment (the decision needed, the
+  options, its own lean, and what happens by default if unanswered) and stops. **Loop guard
+  (agentic-engineering#65 round 10):** it never dispatches more than once per `needs-senior-engineer`
+  summons, and if a summons REAPPEARS on the same PR N=2 times (a 3rd+ total summons), it escalates straight
+  to `needs-human` instead of running another round, since a converging guidance loop wouldn't need to be
+  re-summoned. The count is by **adjudication comment**, not label-application timeline event: it counts
+  `senior-engineer-agent[bot]` comments posted since the more recent of the last codex-engineer[bot]
+  `APPROVED` review (real forward progress) or the last `needs-human` clearance (a person deliberately
+  granting a fresh start) — not since needs-senior-engineer's own routine clearing, which happens on every
+  non-escalated run and would zero the count every cycle. A `workflow_dispatch` carrying the reconciler's
+  `summoned_by` marker (see the reconciler below) runs the guard the same as a `labeled` event does; a bare,
+  unmarked `workflow_dispatch` is the manual human lever and stays exempt. Counting comments rather than
+  labels is what makes the reconciler's label add/remove/re-dispatch churn around a stranded summons (below)
+  harmless bookkeeping instead of budget consumption: a transport failure never produces an adjudication
+  comment, so it can never count as a summons here. Fails gracefully (a clear skip log line, no error) while
+  the dedicated App and its two secrets don't exist yet.
+- **Review re-fire actuator:** `review-on-pr.yml` also accepts `workflow_dispatch` (input: `pr_number`),
+  running the same authorize→review→verdict path against the PR's CURRENT head — same actor allowlist as
+  implement-on-ready's dispatch path (re-verified fresh via `gh pr view`: same-repo, bot-authored, open).
+  Useless against a still-conflicted PR (no merge ref to review); used by the reconciler below for the
+  mergeable-but-unreviewed case, and as a hand tool.
+- **Reconciler (scheduled, level-triggered; ported from antondelafuente/automated-researcher#431/antondelafuente/automated-researcher#513 via
+  agentic-engineering#63):** GitHub fires no `pull_request` run at all while a PR is unmergeable at event
+  time — the run targets `refs/pull/N/merge`, which can't be built while the PR conflicts with base. This is
+  deterministic platform behavior, not dropped events: a sibling merge lands on main, a still-open same-area
+  PR goes conflicted, and every subsequent `opened`/`synchronize` event on it produces nothing until a
+  human/dispatcher notices. `reconcile-prs.yml` triggers on every push to `main` (low-latency primary
+  detector — a sibling merge fires this within about a minute) with a ~10-minute schedule as the backstop
+  for lost events and crashed runs, and walks open bot-authored PRs to repair this itself:
+  `mergeable == CONFLICTING` → post the allowlisted `@claude-code-engineer` resolution-dispatch mention
+  (round-budgeted; escalates to `needs-senior-engineer` instead of nudging forever once the head stops
+  moving — see the senior-engineer leg above); `mergeable == MERGEABLE` with no completed codex review at
+  the current head → re-fire `review-on-pr.yml` via the actuator above (the residual true-event-loss case,
+  if one exists); `mergeable == MERGEABLE` with a completed codex review AT THE CURRENT HEAD in
+  `CHANGES_REQUESTED` state and no addressing dispatch mention since (antondelafuente/automated-researcher#515) →
+  re-derives the same consecutive-round count `review-on-pr.yml`'s submit-verdict uses and re-posts (or
+  escalates past) the same auto-dispatch mention, so a review predating auto-dispatch's own merge, or a
+  dispatch mention that silently failed to post, isn't stranded with no further pipeline event ever arriving
+  (this leg is invisible to the other two: the PR IS mergeable, and IS reviewed-at-head). It also skips any
+  PR already carrying `needs-human` or `needs-dispatcher` unconditionally — those mean a person, or the
+  implementor's own self-escalation, is already the thing to unblock. The
+  round-limit escalation applies the `needs-senior-engineer` label AND directly dispatches
+  `senior-engineer.yml` via its `workflow_dispatch` actuator (inputs: `pr_number`, `summoned_by=reconciler`)
+  — a still-CONFLICTING PR has no mergeable ref, so GitHub creates no `pull_request` run for that workflow's
+  `labeled` trigger to catch, and the label alone would silently strand the escalation with no adjudication
+  ever starting. The `summoned_by` marker is what lets senior-engineer.yml's own loop guard (above) run
+  against this dispatch rather than exempting it the way a bare human `workflow_dispatch` is exempted.
+  **Recovery model for this conflicted-PR path (agentic-engineering#65 round 10 — supersedes round 9's
+  recorded boundary, which the round-10 review correctly refuted: the sweep skipped every
+  `needs-senior-engineer` PR unconditionally, so a stranded label was never actually re-evaluated by a later
+  sweep):** while `needs-senior-engineer` remains applied, its mere presence is the authoritative
+  not-yet-finished signal — the label is never an unconditional, permanent skip. The sweep takes the more
+  recent of the label's latest application and the latest `senior-engineer-agent[bot]` adjudication comment
+  as its reference point; a newer adjudication comment does not by itself prove the run finished (the agent
+  posts it directly mid-run, before its own verify/clear steps), so it only **extends the in-flight grace
+  window** from its own timestamp rather than suppressing recovery indefinitely. Once that reference point is
+  older than the sweep's own grace window (`SENIOR_ENGINEER_GRACE_SECONDS`, comfortably above
+  senior-engineer.yml's 30-minute CLI timeout) with the label still present, the sweep re-dispatches
+  `senior-engineer.yml` itself (`summoned_by=reconciler`) rather than leaving the PR stranded — this is what
+  actually retries a PR whose dispatch or label rollback both failed, instead of merely asserting that a
+  later sweep would. This retry cannot inflate senior-engineer.yml's own loop-guard budget: that guard now
+  counts adjudication comments, not label events (see the loop guard above), and a transport failure never
+  produces one. Per-call rollback perfection is still not the design goal for the label mutations
+  themselves — a failed add/remove is logged and left for this same grace-window-and-re-dispatch check to
+  repair on the next tick, not chased with deeper per-call error handling.
+- **Round-limit escalation now summons the senior engineer, not a human directly
+  (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
+  on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same
+  hard checks as the reconciler's own dispatch — an existing `needs-senior-engineer`/`needs-human`/
+  `needs-dispatcher` label skips it, and the PR head must not have moved since the review was submitted). Reusing
+  agentic-engineering#53's round counting: once a PR reaches its consecutive-`CHANGES_REQUESTED` round
+  limit, the pipeline applies `needs-senior-engineer` (summoning the leg above) with the codex reviewer's
+  consolidated report attached, instead of escalating straight to `needs-human` — the adjudicator gets first
+  crack at descoping or guiding before a human is paged.
+- **Dispatcher playbook** — the operations a human/dispatcher uses to drive this pipeline day to day (each
+  mechanic is defined above; this is the consolidated at-a-glance list):
+  - Dispatch/re-dispatch an Issue: add `ready` (or remove it and re-add after ~5s so the label event
+    re-fires), or `workflow_dispatch` with the issue number.
+  - Trigger an addressing round on a PR carrying review findings: comment `@claude-code-engineer` plus
+    guidance on the PR (allowlisted authors only — see "Re-entry / retry" above).
+  - **PR gone silent (no checks/review run at all):** check `mergeable` first (`gh pr view <n> --json
+    mergeable`) — don't reach for `gh pr update-branch` on reflex, since that only helps a base-branch fix
+    that already landed. `CONFLICTING` → trigger a resolution round the same way the reconciler does
+    (comment `@claude-code-engineer` asking it to merge origin/main, resolve, and push); `MERGEABLE` with no
+    review at the current head → `gh workflow run review-on-pr.yml -f pr_number=<n>` (the actuator). The
+    scheduled reconciler normally beats a human to both within ~10 minutes; this is the manual equivalent
+    for when you don't want to wait.
+  - Unblock a `needs-senior-engineer` Issue or PR: answer the blocking question in a comment, remove
+    `needs-senior-engineer`, then re-flip `ready` (issue) or re-trigger addressing (PR) per the two bullets
+    above.
+  - Trigger a manual in-flight adjudication on a PR: `gh workflow run senior-engineer.yml -f pr_number=<n>`
+    (works with or without `needs-senior-engineer` present — the manual lever doesn't require the label).
+  - Unblock a `needs-human` PR: answer the structured question the senior engineer posted, remove
+    `needs-human`, and re-apply `needs-senior-engineer` if you want another automated adjudication pass, or
+    comment `@claude-code-engineer` directly if you already know the exact fix.
 - **Secrets this flow needs** (instance-provisioned, never checked in): `ANTHROPIC_API_KEY`,
   `OPENAI_API_KEY`, `CLAUDE_APP_ID`, `CLAUDE_APP_PRIVATE_KEY`, `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`.
   Until all six are set, `ready` events fail loudly in the Actions tab (a missing-secret error at
   token-mint) rather than silently doing something else. (On this repo, all six are already provisioned as
-  of this PR.)
+  of this PR.) The senior-engineer leg additionally needs `SENIOR_ENGINEER_APP_ID` +
+  `SENIOR_ENGINEER_APP_PRIVATE_KEY`, but by design fails gracefully (a clear skip log line) rather than
+  loudly while those two are unset, since it's an optional-until-provisioned addition to an already-working
+  pipeline, not a bring-up dependency the way the original six are. Two legs additionally need `Actions:
+  write` granted to a GitHub App: the triager's sweep leg needs it on `CLAUDE_APP` (alongside its existing
+  Issues/Contents scopes) to dispatch a per-issue assessment run for each straggler it finds, and the
+  reconciler needs it on `CODEX_APP` to re-fire `review-on-pr.yml` via `workflow_dispatch` for a mergeable-
+  but-unreviewed head (`reconcile-prs.yml`'s `handle_mergeable`), and — same token, same scope — to summon
+  `senior-engineer.yml` via `workflow_dispatch` at its own round-limit escalation on a still-CONFLICTING PR
+  (`handle_conflicted`), since that PR's `labeled` event can never fire a `pull_request` run to catch it.
 - **Required-check status (as-built):** branch protection on `main` requires the `checks` status (the
   `checks.yml` Action) as a required GitHub-reported status, with `review-on-pr`'s native cross-family
   review as the required approving review — added via the owner-token maintenance path
@@ -145,7 +276,11 @@ Cross-repo issue/PR references are fully qualified (`owner/repo#N` or a full URL
 written — commits, PRs, docs, and chat — never a bare `#N`. A bare `#N` auto-links against whatever repo
 happens to be rendering it, not the repo the writer meant, and silently resolves to the wrong Issue or 404s.
 (This repo's own DISPOSITIONS block once carried exactly this failure — a `#49` meant for a different repo,
-fixed below.)
+fixed below.) A same-repo bare ref in `automated-researcher` becomes exactly this cross-repo hazard the
+moment it's copied into this repo unqualified — so every port/resync from `automated-researcher` must
+include a ref-qualification pass (prefixing every bare ref with `antondelafuente/`, including forms split
+across a line wrap) over the files it touched, before it's considered done; this class has re-imported
+itself on more than one sync already (agentic-engineering#65 rounds 4 and 7).
 
 <!-- DISPOSITIONS:START -->
 ## Issue tracker — dispositions
@@ -174,12 +309,44 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`parked`** — real but deliberately not-now; revisit later. (Distinct from `wontfix` = never.)
 - **`other`** — doesn't fit the others; a recurring `other` is the signal to evolve the vocabulary.
 
-**`needs-shaping → ready` is the researcher's transition, in every lane.** An agent records the flip only on
-the back of an actual researcher conversation, and the flip must **cite it** — a comment on the issue
-summarizing/linking the shaping discussion. An agent asked to *implement* an issue never flips its disposition
-label as a step of implementing it — that would let it triage its own way in. This is a norm every lane
-follows; a lane's mechanical *enforcement* of it (e.g. a pre-flight before work starts, vs. a gate only at
-close) is that lane's own concern to build out.
+**Triager (event-driven per-ticket assessment; ported from antondelafuente/automated-researcher#437/antondelafuente/automated-researcher#497 via
+agentic-engineering#63, capability-reduction pattern from antondelafuente/automated-researcher#523 via
+agentic-engineering#65 round 6 sync):** `triage-assess.yml` assesses every newly opened/reopened Issue
+**from an allowlisted sender** (the researcher or one of the two engineer bots) within minutes — two
+independent blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses)
+against `.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
+(`DO`/`SKIP`/`ASK`), an optional body-edit, and (for `DO`) a provisional wave guess based on this ticket's
+own expected footprint — posted as a single idempotent on-ticket assessment comment, never a label or body
+write. Assessment is strictly per-ticket (one issue per run, never a batch), so this wave guess cannot be
+compared against any other open DO ticket; actual wave/serialization composition across tickets is a
+researcher judgment made at flip time, not an automated output. This repo is public, so an Issue filed or
+reopened by anyone else does NOT get this event-driven pass (it would otherwise let an outside filer trigger
+paid model calls for free) — such an Issue is instead picked up by the weekly backstop sweep (`schedule`),
+just on the sweep's own cadence instead of within minutes. The sweep gathers every open,
+unlabeled-and-unescalated issue with no assessment comment yet, regardless of the ticket's own author, and
+dispatches each through the same per-ticket path; that dispatched run classifies the ticket's own author
+(and every comment author) against the pipeline's allowlist and, for a non-allowlisted one, runs the
+assess/adjudicate jobs with **no repository checkout and no tools beyond producing the structured
+verdict** — the rubric and ticket packet are embedded directly into the prompt text instead. The model call
+still runs under `ANTHROPIC_API_KEY` (that's how it's invoked at all) — the safeguard is capability removal,
+not key removal: with no checkout and no tool-execution surface, an untrusted body can influence only the
+verdict text the job produces, never read repo files or run commands. A capability-reduced `DO` verdict has its
+wave mechanically forced to the ticket's own issue number (it has no repo access to check file-footprint
+disjointness against another ticket, so it serializes rather than risks a silent batch). The sweep then
+rebuilds a rollup digest comment on the tracking issue (#64) listing every ticket already assessed and still
+awaiting a researcher decision. `needs-design`
+is retired, same as automated-researcher's own convention — there is no separate "awaiting shaping" label
+this triager introduces or resurrects; an Issue with no disposition is either fresh (about to get its
+event-driven assessment, or awaiting the backstop sweep if filed by a non-allowlisted sender) or already
+carries the triager's assessment comment, in which case the citation below is exactly that comment.
+
+**`unlabeled → ready` (or `needs-shaping → ready`) is the researcher's transition, in every lane.** An agent
+records the flip only on the back of an actual researcher conversation, and the flip must **cite it** — a
+comment on the issue summarizing/linking the shaping discussion (the triager's assessment comment, when one
+already exists, is exactly this citation). An agent asked to *implement* an issue never flips its
+disposition label as a step of implementing it — that would let it triage its own way in. This is a norm
+every lane follows; a lane's mechanical *enforcement* of it (e.g. a pre-flight before work starts, vs. a
+gate only at close) is that lane's own concern to build out.
 
 **Invariant:** every open Issue is EITHER unlabeled (= untriaged, awaiting triage — distinct from
 `needs-shaping`) OR carries **exactly one** disposition. Enforcement flags only an Issue with two-or-more.

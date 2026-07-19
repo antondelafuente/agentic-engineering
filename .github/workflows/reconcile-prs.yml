@@ -1,0 +1,541 @@
+name: reconcile-prs
+
+# GitHub-native SWE pipeline, reconciler leg (ported from antondelafuente/automated-researcher#431 via agentic-engineering#63).
+# GitHub creates NO `pull_request`
+# workflow run when a PR is unmergeable at event time (the run targets refs/pull/N/merge, which can't be
+# built while the PR conflicts with base) -- deterministic platform behavior, not dropped events. In wave
+# operation this is the dominant silence mode: a sibling merge lands on main, a still-open same-area PR
+# becomes conflicted, and from that moment every `opened`/`synchronize` event on it silently produces
+# nothing until a human/dispatcher notices. This scheduled, level-triggered reconciler walks open
+# bot-authored PRs every ~10 minutes and repairs the two resulting states itself:
+#   - `mergeable == CONFLICTING`: post the allowlisted `@claude-code-engineer` resolution-dispatch mention
+#     (address-review.yml re-dispatches the implementor onto the SAME branch to merge origin/main, resolve,
+#     and push -- which fires `synchronize` on the now-buildable merge ref). Round-budgeted: escalates to
+#     `needs-senior-engineer` instead of nudging forever if the head never moves (antondelafuente/automated-researcher#438 --
+#     the in-flight judgment layer looks closer at why plain resolution-dispatch isn't landing and hands
+#     exact guidance, or escalates to `needs-human` itself if it can't). That escalation ALSO
+#     workflow_dispatches senior-engineer.yml directly (antondelafuente/automated-researcher#524): the PR is still
+#     CONFLICTING when the label lands, so the `pull_request: labeled` event senior-engineer.yml listens
+#     for never fires (same no-merge-ref gap this reconciler exists to repair) -- without the explicit
+#     dispatch, the label would land with nothing to summon it. That dispatch carries a `summoned_by=
+#     reconciler` marker (antondelafuente/automated-researcher#527) so senior-engineer.yml's reappearance loop guard counts
+#     it -- without the marker, repeated reconciler summons on a still-non-converging conflicted PR would
+#     bypass the guard entirely, since a bare workflow_dispatch is otherwise exempt from it.
+#   - `mergeable == MERGEABLE` but the head has no completed codex review yet: re-fire review-on-pr.yml via
+#     its `workflow_dispatch` actuator (the residual true-event-loss case, if one exists).
+#   - `mergeable == MERGEABLE` with a completed codex review AT THE CURRENT HEAD whose state is
+#     CHANGES_REQUESTED, and no addressing activity since (antondelafuente/automated-researcher#515): this PR is invisible
+#     to both legs above (it IS mergeable, and it IS reviewed-at-head) and to submit-verdict's own
+#     auto-dispatch, which only fires at review-submission time -- a review predating auto-dispatch's merge,
+#     or a dispatch mention that silently failed to post, strands the PR with no further pipeline event ever
+#     arriving. This third leg re-derives the same round count submit-verdict uses and re-posts (or
+#     escalates past) the same auto-dispatch mention.
+#   - `needs-senior-engineer` present with the label (or, if newer, the most recent senior-engineer-agent[bot]
+#     adjudication comment) older than a grace window (antondelafuente/automated-researcher#529, round-2 review fix): the
+#     label alone doesn't prove a summons ran, or is even still in flight -- a workflow_dispatch that failed
+#     after the label landed (or whose rollback below also failed) strands the PR labeled with nothing behind
+#     it. A comment newer than the label does NOT prove the run finished successfully either: the
+#     senior-engineer agent posts its guidance/escalation comment directly via its own `gh` call mid-run, so a
+#     crash or timeout right after posting -- before the workflow's own verify/clear steps run -- leaves the
+#     label stranded with a comment already sitting in front of it. Since every successful completion path
+#     (the adjudicate job's clear step, or loop-guard-escalate's label swap) removes needs-senior-engineer, the
+#     label still being present is the authoritative "not yet finished" signal regardless of comments; a
+#     comment only extends the in-flight grace window, it never suppresses recovery indefinitely. The sweep
+#     used to skip every needs-senior-engineer PR unconditionally, which left a stranded one deadlocked
+#     forever (it can never regain a pipeline event on its own). This leg re-dispatches senior-engineer.yml
+#     (same `summoned_by=reconciler` marker as the conflict leg above) instead of leaving it stranded.
+# See AGENTS.md "GitHub-native SWE pipeline (BYOK)" for the full trust model this implements.
+#
+# antondelafuente/automated-researcher#513: GitHub emits no event when a PR becomes conflicted, but the event that CAUSES
+# a conflict IS observable -- every merge is a push to main. The `push` trigger below is now the primary,
+# low-latency detector (a sibling merge lands, this fires within ~a minute); the cron stays as the backstop
+# for lost events and crashed runs. Because `mergeable` is computed lazily, a push-triggered run can see
+# `UNKNOWN` (GitHub's background job hasn't finished) where the cron -- ticking minutes later -- would
+# already see the settled value; the reconcile step below retries UNKNOWN a few times before giving up for
+# the tick, rather than treating it as "fine" (which would let a genuinely CONFLICTING PR go unresolved).
+# The `concurrency` group below serializes overlapping sweeps: a merge burst can fire several pushes within
+# seconds, and two sweeps racing over the same PR list could double-dispatch a resolution round.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: reconcile-prs
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    name: reconcile
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout runs FIRST (same rationale as the other pipeline workflows): the reconcile step below
+      # sources the canonical-login helper from the working tree, which must exist before it's sourced.
+      - name: Checkout base branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout v7.0.0
+        with:
+          persist-credentials: false
+
+      # A single minted token covers every gh call this job makes, read AND write alike: every mutation
+      # (mention comment, label, workflow_dispatch) needs it anyway, and address-review.yml's comment-author
+      # allowlist (["antondelafuente","codex-engineer[bot]","app/codex-engineer","senior-engineer-agent[bot]","app/senior-engineer-agent"])
+      # deliberately EXCLUDES the claude engineer bot, so the resolution-dispatch mention specifically must
+      # be posted as this identity.
+      - name: Mint codex engineer App token
+        id: mint_codex_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # actions/create-github-app-token v3.2.0
+        with:
+          app-id: ${{ secrets.CODEX_APP_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Reconcile open bot PRs
+        env:
+          GH_TOKEN: ${{ steps.mint_codex_token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          source "$GITHUB_WORKSPACE/.github/scripts/canonical-login.sh"
+
+          # Round budget before a CONFLICTING PR with no progress escalates to needs-senior-engineer
+          # (antondelafuente/automated-researcher#438), rather than being re-nudged forever.
+          BUDGET=3
+          CONFLICT_MARKER="Reconciler: PR conflicts with main"
+          REVIEW_MARKER="Reconciler: re-firing review actuator"
+          # Comfortably above address-review.yml's 45-minute Claude-CLI timeout (conflict path) / a codex
+          # review's typical few-minute runtime (review-actuator path): a dispatch this recent against the
+          # SAME head is treated as still in flight rather than re-dispatched or counted as a fresh round.
+          CONFLICT_GRACE_SECONDS=$((55 * 60))
+          REVIEW_GRACE_SECONDS=$((30 * 60))
+          # Third leg (antondelafuente/automated-researcher#515): a dispatch mention here also fires address-review.yml, so
+          # the same in-flight window as the conflict leg's mention applies -- same idiom, same value.
+          STRANDED_GRACE_SECONDS=$CONFLICT_GRACE_SECONDS
+          # Fourth leg (antondelafuente/automated-researcher#529): comfortably above senior-engineer.yml's own 30-minute
+          # Claude-CLI timeout on its `adjudicate` job -- needs-senior-engineer activity (the label
+          # application, or a later adjudication comment) more recent than this is treated as a summons
+          # still in flight, not yet stranded.
+          SENIOR_ENGINEER_GRACE_SECONDS=$((40 * 60))
+          # Shared budget with review-on-pr.yml's submit-verdict step (its LIMIT=3) -- this leg re-derives
+          # and re-acts on the SAME consecutive-CHANGES_REQUESTED count, not a separate counter, so a PR
+          # can't get extra rounds just because this leg is the one dispatching them.
+          REVIEW_ADDRESS_LIMIT=3
+          # address-review.yml's own comment-author allowlist (canonical logins only; canon_login below
+          # already remaps the "app/<slug>" form), minus the claude engineer bot itself -- the mention
+          # predicate this leg checks for is "did the SAME set of identities that can trigger an addressing
+          # round already do so", not merely "any comment exists".
+          DISPATCH_MENTION_ALLOW='["antondelafuente","codex-engineer[bot]","senior-engineer-agent[bot]"]'
+          now_epoch=$(date -u +%s)
+
+          # Lazy-mergeability retry (antondelafuente/automated-researcher#513): right after a push, GitHub's mergeability
+          # computation is still running in the background and the API reports UNKNOWN until it finishes.
+          # A few short retries give a push-triggered run a real chance to see the settled CONFLICTING/
+          # MERGEABLE value itself, instead of routinely deferring to the next cron tick and losing most
+          # of the push trigger's latency win.
+          MERGEABILITY_RETRY_ATTEMPTS=3
+          MERGEABILITY_RETRY_SECONDS=10
+
+          # last_marker_comment REPO PR_NUMBER MARKER -> most recent matching comment (or "null"), via the
+          # same canon_login duplication idiom review-on-pr.yml's history step uses (a jq filter can't
+          # source the bash helper).
+          last_marker_comment() {
+            local n="$1" marker="$2"
+            gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s --arg marker "$marker" '
+              def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+              add // [] | map(select(((.user.login | canon_login) == "codex-engineer[bot]") and ((.body // "") | startswith($marker))))
+                | sort_by(.created_at) | last
+            '
+          }
+
+          # handle_stranded_senior_engineer (antondelafuente/automated-researcher#529, round-2 review fix): decouples the
+          # sweep's needs-senior-engineer skip from the label's mere presence -- but a senior-engineer-agent
+          # adjudication comment newer than the label does NOT by itself prove the run finished (see the
+          # header comment above this job's steps for why: the agent posts that comment directly via its own
+          # `gh` call mid-run, so a crash or timeout right after posting -- before senior-engineer.yml's own
+          # verify/clear steps run -- leaves the label stranded behind a comment that already exists).
+          # needs-senior-engineer being present at all is the authoritative "not yet finished" signal (every
+          # successful completion path removes it); a comment only extends the in-flight grace window from
+          # its own timestamp rather than the label's, since a run that comments late is still plausibly
+          # finishing up. Once the later of the label application and the last adjudication comment is older
+          # than SENIOR_ENGINEER_GRACE_SECONDS with the label still present, re-dispatch rather than leaving
+          # the PR deadlocked.
+          handle_stranded_senior_engineer() {
+            local n="$1"
+
+            # Same errexit-disabled-by-`if !`-caller hazard as the other handlers below: check each read's
+            # exit status explicitly and skip this PR for this tick on failure rather than treating it as
+            # absence (which would trigger a spurious re-dispatch).
+            local label_ts
+            if ! label_ts=$(gh api "repos/$REPO/issues/$n/events" --paginate | jq -s -r '
+              add // [] | map(select(.event == "labeled" and .label.name == "needs-senior-engineer")) | sort_by(.created_at) | last | .created_at // empty
+            '); then
+              echo "::warning::PR #$n: reading needs-senior-engineer label history failed; skipping this tick"
+              return 1
+            fi
+            if [ -z "$label_ts" ]; then
+              echo "PR #$n: needs-senior-engineer set but no labeled event found in its timeline; skipping this tick"
+              return
+            fi
+
+            local comment_ts
+            if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s -r '
+              def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+              add // [] | map(select((.user.login | canon_login) == "senior-engineer-agent[bot]")) | sort_by(.created_at) | last | .created_at // empty
+            '); then
+              echo "::warning::PR #$n: reading senior-engineer-agent comment history failed; skipping this tick"
+              return 1
+            fi
+
+            local reference_ts="$label_ts"
+            if [ -n "$comment_ts" ] && [[ "$comment_ts" > "$label_ts" ]]; then
+              reference_ts="$comment_ts"
+            fi
+
+            local elapsed=$(( now_epoch - $(date -u -d "$reference_ts" +%s) ))
+            if [ "$elapsed" -lt "$SENIOR_ENGINEER_GRACE_SECONDS" ]; then
+              echo "PR #$n: needs-senior-engineer activity (label applied at $label_ts, most recent adjudication comment at ${comment_ts:-none}) as recently as ${elapsed}s ago; treating as still in flight, skipping this tick"
+              return
+            fi
+
+            echo "PR #$n: needs-senior-engineer applied at $label_ts (most recent adjudication comment at ${comment_ts:-none}) with no activity in the last ${elapsed}s and the label still present -- that summons appears stranded (e.g. a dispatch that failed, a run that crashed or timed out after posting its comment, or a label-removal that itself failed); re-dispatching senior-engineer.yml"
+            if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
+              echo "::warning::PR #$n: workflow_dispatch of senior-engineer.yml failed; leaving needs-senior-engineer in place for a later tick to retry"
+              return 1
+            fi
+          }
+
+          handle_conflicted() {
+            local n="$1" head="$2"
+            local short="${head:0:8}"
+
+            # This function runs inside `if ! handle_conflicted ...; then` below, which disables
+            # errexit for its duration -- an unchecked read failure here would fall through to the
+            # empty-string branch below and be indistinguishable from "no marker exists", triggering
+            # a duplicate resolution dispatch. Check the read's exit status explicitly and skip this
+            # PR for this tick on failure; the reconciler re-runs in ~10 minutes, so doing nothing is
+            # the safe direction. Only a successful-but-empty read means "no marker".
+            local last
+            if ! last=$(last_marker_comment "$n" "$CONFLICT_MARKER"); then
+              echo "::warning::PR #$n: reading conflict-marker history failed; skipping this tick"
+              return 1
+            fi
+
+            local round=1
+            if [ "$last" != "null" ] && [ -n "$last" ]; then
+              local prev_sha prev_round prev_ts elapsed
+              prev_sha=$(jq -r '.body' <<<"$last" | grep -oE 'head [0-9a-f]{8}' | head -1 | awk '{print $2}')
+              prev_round=$(jq -r '.body' <<<"$last" | grep -oE 'round [0-9]+' | head -1 | awk '{print $2}')
+              prev_ts=$(jq -r '.created_at' <<<"$last")
+              if [ "$prev_sha" = "$short" ] && [ -n "$prev_round" ]; then
+                elapsed=$(( now_epoch - $(date -u -d "$prev_ts" +%s) ))
+                if [ "$elapsed" -lt "$CONFLICT_GRACE_SECONDS" ]; then
+                  echo "PR #$n: conflict-resolution round $prev_round dispatched ${elapsed}s ago against the same head; treating as still in flight, skipping this tick"
+                  return
+                fi
+                round=$((prev_round + 1))
+              fi
+            fi
+
+            if [ "$round" -gt "$BUDGET" ]; then
+              echo "PR #$n: conflicted with no progress after $((round - 1)) reconciler dispatch(es); escalating to needs-senior-engineer"
+              gh pr comment "$n" --repo "$REPO" --body "Reconciler: PR has stayed conflicted with main across $((round - 1)) resolution-dispatch round(s) with no new commit landing (still at head $short). Escalating to \`needs-senior-engineer\` rather than continuing to nudge."
+              # antondelafuente/automated-researcher#524: a CONFLICTING PR has no buildable merge ref, so GitHub never
+              # fires the `pull_request: labeled` event senior-engineer.yml listens for -- the label
+              # alone would land with nothing to summon it. Explicitly workflow_dispatch it (the
+              # workflow already accepts a pr_number input and tolerates running without the label
+              # present on that path); its own per-PR concurrency group covers the harmless double-summon
+              # if a later labeled event on a since-mergeable PR also fires.
+              #
+              # antondelafuente/automated-researcher#528 round 2: label BEFORE dispatching (not after) so the `labeled` event this
+              # escalation produces is already on the issue's event timeline by the time the summoned
+              # run reads it. The prior dispatch-then-label ordering let the summoned run's timeline
+              # read race the label write -- or miss it entirely on an unchecked write failure -- so the
+              # loop guard's count could never be trusted either direction (double-counted if the write
+              # landed first, or never reached 3 if the write silently failed every time). If the label
+              # write succeeds but the dispatch itself then fails, roll the label back so this PR goes
+              # straight back through the normal CONFLICTING budget path on the next tick rather than
+              # sitting labeled with nothing behind it in the meantime.
+              if ! gh pr edit "$n" --repo "$REPO" --add-label needs-senior-engineer; then
+                echo "::warning::PR #$n: failed to add needs-senior-engineer; not dispatching this tick so the next tick retries"
+                return 1
+              fi
+              if ! gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
+                echo "::warning::PR #$n: workflow_dispatch of senior-engineer.yml failed after labeling; removing needs-senior-engineer so the next tick retries instead of leaving it stranded"
+                if ! gh pr edit "$n" --repo "$REPO" --remove-label needs-senior-engineer; then
+                  # antondelafuente/automated-researcher#529: this used to need manual attention, since the sweep skipped
+                  # every needs-senior-engineer PR unconditionally -- a stranded one had no path back to a
+                  # pipeline event. It no longer does: handle_stranded_senior_engineer below re-dispatches
+                  # any needs-senior-engineer PR with no newer adjudication comment past its grace window,
+                  # so a later tick retries this PR even with the label stuck in place.
+                  echo "::error::PR #$n: also failed to roll back needs-senior-engineer after a failed dispatch -- left labeled with no adjudication summoned; the sweep's stranded-label leg will retry it on a later tick"
+                fi
+                return 1
+              fi
+              return
+            fi
+
+            echo "PR #$n: conflicted with main; dispatching resolution round $round/$BUDGET (head $short)"
+            gh pr comment "$n" --repo "$REPO" --body "$CONFLICT_MARKER (auto-dispatch round $round/$BUDGET, head $short). @claude-code-engineer this PR conflicts with the base branch. Merge origin/main, resolve the conflicts, and push."
+          }
+
+          handle_stranded_rejected() {
+            local n="$1" head="$2" review_info="$3"
+            local short="${head:0:8}"
+            local review_submitted_at
+            review_submitted_at=$(jq -r '.at_head.submitted_at' <<<"$review_info")
+
+            # Same formula review-on-pr.yml's submit-verdict step uses for its own `prior_round` (trailing
+            # run of codex-engineer[bot] CHANGES_REQUESTED reviews, reset by any APPROVED) -- but computed
+            # over ALL reviews INCLUDING the one at the current head, since that review is already posted
+            # here (unlike submit-verdict, which computes prior_round BEFORE submitting the review that
+            # would extend the run). This IS the round number that review represents.
+            local round
+            round=$(jq '.all | sort_by(.submitted_at)
+              | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED"))
+              | reduce .[] as $r (0; if $r.state == "CHANGES_REQUESTED" then . + 1 else 0 end)' <<<"$review_info")
+
+            if [ "$round" -ge "$REVIEW_ADDRESS_LIMIT" ]; then
+              echo "PR #$n: stranded rejected review at head $short is round $round/$REVIEW_ADDRESS_LIMIT with no addressing dispatch; escalating to needs-senior-engineer"
+              gh pr comment "$n" --repo "$REPO" --body "Review loop: $round consecutive CHANGES_REQUESTED rounds from the Codex reviewer with no approve in between (limit $REVIEW_ADDRESS_LIMIT). Escalating to \`needs-senior-engineer\` for in-flight adjudication rather than continuing to auto-dispatch. See the review above for the latest findings."
+              gh pr edit "$n" --repo "$REPO" --add-label needs-senior-engineer
+              return
+            fi
+
+            # Idempotency (antondelafuente/automated-researcher#515): "addressing activity since the review" means a
+            # newer allowlisted dispatch mention -- the head hasn't moved (this review is AT the current
+            # head by construction), so "no newer commit" is already guaranteed and doesn't need its own
+            # check. `created_at >= $since` (not `>`): GitHub timestamps are 1-second resolution and
+            # review-on-pr.yml's submit-verdict posts its own dispatch mention in the step immediately
+            # after submitting the review, so the two can legitimately share a timestamp -- a strict `>`
+            # would treat that same-second mention as absent and re-dispatch a duplicate, which would
+            # cancel-in-progress the already-running address-review.yml job (antondelafuente/automated-researcher#516 P1).
+            # Same errexit-disabled-by-caller hazard as elsewhere in this script: check the read's exit
+            # status explicitly.
+            local mentions_json
+            if ! mentions_json=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s --arg since "$review_submitted_at" --argjson allow "$DISPATCH_MENTION_ALLOW" '
+              def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+              (add // []) | map(select(((.user.login | canon_login) as $c | ($allow | index($c)) != null)
+                and ((.body // "") | contains("@claude-code-engineer"))
+                and (.created_at >= $since)))
+                | sort_by(.created_at)
+            '); then
+              echo "::warning::PR #$n: reading dispatch-mention history failed; skipping this tick"
+              return 1
+            fi
+
+            local mention_count
+            mention_count=$(jq 'length' <<<"$mentions_json")
+
+            if [ "$mention_count" -gt 0 ]; then
+              local last_mention mention_ts elapsed
+              last_mention=$(jq -c '.[-1]' <<<"$mentions_json")
+              mention_ts=$(jq -r '.created_at' <<<"$last_mention")
+              elapsed=$(( now_epoch - $(date -u -d "$mention_ts" +%s) ))
+              if [ "$elapsed" -lt "$STRANDED_GRACE_SECONDS" ]; then
+                echo "PR #$n: dispatch mention posted ${elapsed}s ago against the rejected review at head $short; treating as still in flight, skipping this tick"
+                return
+              fi
+
+              # antondelafuente/automated-researcher#516 P0: `round` only moves when a NEW review lands at a NEW head --
+              # a dead addressing run (mention posted, grace elapsed, no commit landed since, so the head
+              # is unchanged by construction) never produces either, so `round` cannot double as the
+              # retry-escalation counter here or this branch would re-dispatch the same round forever.
+              # Count how many times THIS round has already been dispatched instead and escalate once that
+              # count exhausts the same budget -- mirroring the conflict leg's round idiom of a bounded,
+              # self-consuming counter, just keyed off dispatch-mention count rather than a stored round
+              # number, since the round number itself is shared with (and must stay meaningful against)
+              # submit-verdict's own numbering.
+              if [ "$mention_count" -ge "$REVIEW_ADDRESS_LIMIT" ]; then
+                echo "PR #$n: round $round has already been dispatched $mention_count time(s) with no addressing commit ever landing (still at head $short); escalating to needs-senior-engineer instead of retrying again"
+                gh pr comment "$n" --repo "$REPO" --body "Review loop: round $round has been auto-dispatched $mention_count time(s) with no addressing commit landing since (limit $REVIEW_ADDRESS_LIMIT). Escalating to \`needs-senior-engineer\` for in-flight adjudication rather than continuing to retry a dispatch that keeps dying before it pushes."
+                gh pr edit "$n" --repo "$REPO" --add-label needs-senior-engineer
+                return
+              fi
+
+              # The dispatch mention is older than address-review.yml's own CLI timeout and no commit has
+              # landed since (head is unchanged) -- that addressing run died without pushing. Re-dispatch
+              # the SAME round rather than leaving the PR stranded a second way (mirrors the conflict leg's
+              # round idiom: a dead run doesn't get a free pass, it gets retried within the same budget).
+              echo "PR #$n: dispatch mention posted ${elapsed}s ago with no addressing commit since (still at head $short); that addressing run appears to have died -- re-dispatching round $round/$REVIEW_ADDRESS_LIMIT (retry $((mention_count + 1))/$REVIEW_ADDRESS_LIMIT)"
+            else
+              echo "PR #$n: rejected codex review at head $short with no addressing dispatch since; dispatching round $round/$REVIEW_ADDRESS_LIMIT"
+            fi
+
+            gh pr comment "$n" --repo "$REPO" --body "Review loop: auto-dispatch round $round/$REVIEW_ADDRESS_LIMIT. @claude-code-engineer the Codex review above requested changes -- please address the findings and push."
+          }
+
+          handle_mergeable() {
+            local n="$1" head="$2"
+            local short="${head:0:8}"
+
+            # Same errexit-disabled-by-`if !`-caller hazard as handle_conflicted above: an unchecked
+            # read failure here would look like "not reviewed" or "no marker" and trigger a duplicate
+            # review-actuator dispatch. Check each read's exit status explicitly and skip this PR for
+            # this tick on failure rather than treating it as absence.
+            local review_info
+            if ! review_info=$(gh api "repos/$REPO/pulls/$n/reviews" --paginate | jq -s --arg head "$head" '
+              def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+              (add // []) | map(select((.user.login | canon_login) == "codex-engineer[bot]"))
+                | {at_head: (map(select(.commit_id == $head)) | sort_by(.submitted_at) | last), all: .}
+            '); then
+              echo "::warning::PR #$n: reading review history failed; skipping this tick"
+              return 1
+            fi
+
+            local at_head
+            at_head=$(jq -c '.at_head' <<<"$review_info")
+
+            if [ "$at_head" != "null" ]; then
+              local review_state
+              review_state=$(jq -r '.state' <<<"$at_head")
+              case "$review_state" in
+                APPROVED)
+                  echo "PR #$n: head $short already has a completed APPROVED codex review; nothing to do"
+                  return
+                  ;;
+                CHANGES_REQUESTED)
+                  handle_stranded_rejected "$n" "$head" "$review_info"
+                  return $?
+                  ;;
+                *)
+                  echo "PR #$n: head $short has a completed codex review with unexpected state '$review_state'; nothing to do"
+                  return
+                  ;;
+              esac
+            fi
+
+            local last
+            if ! last=$(last_marker_comment "$n" "$REVIEW_MARKER"); then
+              echo "::warning::PR #$n: reading review-marker history failed; skipping this tick"
+              return 1
+            fi
+            if [ "$last" != "null" ] && [ -n "$last" ]; then
+              local prev_sha prev_ts elapsed
+              prev_sha=$(jq -r '.body' <<<"$last" | grep -oE 'head [0-9a-f]{8}' | head -1 | awk '{print $2}')
+              prev_ts=$(jq -r '.created_at' <<<"$last")
+              if [ "$prev_sha" = "$short" ]; then
+                elapsed=$(( now_epoch - $(date -u -d "$prev_ts" +%s) ))
+                if [ "$elapsed" -lt "$REVIEW_GRACE_SECONDS" ]; then
+                  echo "PR #$n: review actuator already re-fired ${elapsed}s ago against the same head; treating as still in flight, skipping this tick"
+                  return
+                fi
+              fi
+            fi
+
+            echo "PR #$n: mergeable with no completed review at head $short; re-firing review-on-pr.yml via workflow_dispatch"
+            # `handle_mergeable` runs inside `if ! handle_mergeable ...; then` below, which disables
+            # errexit for the duration of this function call -- a failing `gh workflow run` would NOT
+            # abort the function on its own. Check its exit status explicitly and bail out BEFORE
+            # posting the marker comment, so the marker is only ever written after a successful dispatch
+            # (an unchecked failure here would still record the in-flight marker and suppress retries for
+            # up to REVIEW_GRACE_SECONDS despite no review having actually been launched).
+            gh workflow run review-on-pr.yml --repo "$REPO" -f "pr_number=$n" || return 1
+            gh pr comment "$n" --repo "$REPO" --body "$REVIEW_MARKER (head $short)." >/dev/null
+          }
+
+          # A plain `mapfile -t arr < <(cmd)` does NOT propagate cmd's exit status through `set -e` (process
+          # substitution failures are invisible to the parent shell's error trap) -- a failing `gh pr list`
+          # would silently look like "zero open PRs" and this tick would exit 0 having reconciled nothing
+          # (same lesson as .aar-ci/checks.sh's own diff-capture step). Capture through a checked command
+          # substitution instead.
+          if ! numbers_output=$(gh pr list --repo "$REPO" --state open --author "app/claude-code-engineer" --json number --jq '.[].number' --limit 100); then
+            echo "::error::gh pr list failed"
+            exit 1
+          fi
+          numbers=()
+          if [ -n "$numbers_output" ]; then
+            mapfile -t numbers <<< "$numbers_output"
+          fi
+          echo "found ${#numbers[@]} open PR(s) authored by app/claude-code-engineer"
+
+          for n in "${numbers[@]}"; do
+            if ! pr=$(gh pr view "$n" --repo "$REPO" --json number,author,isCrossRepository,state,mergeable,headRefOid,labels); then
+              echo "::warning::PR #$n: gh pr view failed; skipping this tick"
+              continue
+            fi
+            author_canon=$(canonical_login "$(jq -r '.author.login' <<<"$pr")" 2>/dev/null || echo "")
+            is_cross=$(jq -r '.isCrossRepository' <<<"$pr")
+            state=$(jq -r '.state' <<<"$pr")
+
+            # Re-verify fresh (belt-and-suspenders on top of the --author list filter above), same
+            # predicate every other leg of this pipeline applies before acting on a PR.
+            if [ "$author_canon" != "claude-code-engineer[bot]" ] || [ "$is_cross" != "false" ] || [ "$state" != "OPEN" ]; then
+              echo "PR #$n: failed fresh re-verification (author=$author_canon cross=$is_cross state=$state); skipping"
+              continue
+            fi
+
+            # needs-senior-engineer/needs-human (antondelafuente/automated-researcher#438) mean the in-flight judgment layer
+            # is already working this PR or has already escalated it to a person -- the reconciler must not
+            # pile a duplicate resolution-dispatch round on top of that. needs-dispatcher is this repo's own
+            # escalation label (AGENTS.md's escalation section): the implementor already self-escalated as
+            # blocked or contradicted, and the reconciler must not re-dispatch/re-escalate over that either.
+            # needs-senior-engineer is no longer an unconditional skip (antondelafuente/automated-researcher#529):
+            # handle_stranded_senior_engineer re-dispatches it if the label has no adjudication comment behind
+            # it past its grace window, instead of leaving a stranded one deadlocked forever. needs-human and
+            # needs-dispatcher stay plain skips -- both are terminal states only a human (or the implementor's
+            # own next dispatch) clears. Branch ORDER below is load-bearing for needs-human vs
+            # needs-senior-engineer: both labels can coexist -- senior-engineer.yml's adjudicate job can
+            # verify/add needs-human and then have its "Clear needs-senior-engineer" step fail (its failure()
+            # step deliberately leaves the stale label in place), and loop-guard-escalate's single
+            # `--add-label needs-human --remove-label needs-senior-engineer` can have the add land while the
+            # remove fails -- so needs-human must be matched FIRST (a bash `case` takes the first matching
+            # branch), or a PR carrying both labels would be routed to handle_stranded_senior_engineer and
+            # re-dispatched instead of parked for a human, contradicting the terminal-skip contract above.
+            # Recovery consequence: once a human clears needs-human, the stale needs-senior-engineer becomes
+            # visible to this sweep again and is re-dispatched after its grace window -- that is the intended
+            # self-heal for the leftover label, not a bug.
+            labels=$(jq -r '[.labels[].name] | join(",")' <<<"$pr")
+            case ",$labels," in
+              *,needs-human,*) echo "PR #$n: needs-human already set, skipping"; continue ;;
+              *,needs-dispatcher,*) echo "PR #$n: needs-dispatcher already set, skipping"; continue ;;
+              *,needs-senior-engineer,*)
+                if ! handle_stranded_senior_engineer "$n"; then
+                  echo "::warning::PR #$n: stranded needs-senior-engineer handling failed this tick"
+                fi
+                continue
+                ;;
+            esac
+
+            mergeable=$(jq -r '.mergeable' <<<"$pr")
+            head_sha=$(jq -r '.headRefOid' <<<"$pr")
+
+            # Retry a lazily-unresolved UNKNOWN a few times before moving on: never treat it as "fine"
+            # (that would let a genuinely CONFLICTING PR sit unresolved until the next run), and never
+            # dispatch on it directly (only a computed CONFLICTING may dispatch a resolution round).
+            retry_attempt=1
+            while [ "$mergeable" = "UNKNOWN" ] && [ "$retry_attempt" -lt "$MERGEABILITY_RETRY_ATTEMPTS" ]; do
+              sleep "$MERGEABILITY_RETRY_SECONDS"
+              if ! mergeable=$(gh pr view "$n" --repo "$REPO" --json mergeable --jq '.mergeable'); then
+                echo "::warning::PR #$n: re-checking mergeability failed; leaving unresolved for this tick"
+                mergeable="UNKNOWN"
+                break
+              fi
+              retry_attempt=$((retry_attempt + 1))
+            done
+
+            # Fault-isolate each PR: one PR's transient API failure must not abort reconciliation of every
+            # other PR in the same tick (the reconciler is level-triggered and self-healing -- the next
+            # tick, ~10 minutes later, simply retries). `if ! fn; then` is the standard idiom for capturing
+            # a function's exit status without an inner failure tripping the script-wide `set -e` abort.
+            case "$mergeable" in
+              CONFLICTING)
+                if ! handle_conflicted "$n" "$head_sha"; then
+                  echo "::warning::PR #$n: conflict-resolution handling failed this tick"
+                fi
+                ;;
+              MERGEABLE)
+                if ! handle_mergeable "$n" "$head_sha"; then
+                  echo "::warning::PR #$n: review re-fire handling failed this tick"
+                fi
+                ;;
+              *)
+                echo "PR #$n: mergeable status '$mergeable' still not resolved by GitHub after $retry_attempt attempt(s); leaving for the next run"
+                ;;
+            esac
+          done

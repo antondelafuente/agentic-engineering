@@ -1,0 +1,549 @@
+name: senior-engineer
+
+# GitHub-native SWE pipeline, senior-engineer leg (ported from antondelafuente/automated-researcher#438 via
+# agentic-engineering#63; automated-researcher's parent design antondelafuente/automated-researcher#414's "Shepherd"). In-flight PR judgment --
+# verifying reviewer findings, adjudicating disputes, handing the implementor exact guidance -- previously
+# depended on a human-attended session, landing on `needs-dispatcher` whenever the reconciler's round budget
+# tripped or an agent needed adjudication. This workflow makes that judgment layer product-owned and
+# event-driven like the rest of the pipeline: it's summoned by the `needs-senior-engineer` label landing on
+# a PR (the reconciler's round-budget trip, review-on-pr.yml's own round-limit trip, an implementor asking
+# for help, or a human), plus `workflow_dispatch` as the manual lever. Runs a Fable-family agent
+# (judgment-dense per model policy; events are rare so per-event premium cost is fine) with a read-only base
+# checkout, gh read access to the PR thread, and comment/label permission -- it never pushes code itself. On
+# success it posts a guidance comment through the existing `@claude-code-engineer` mention path
+# (re-dispatching the implementor via address-review.yml) and clears `needs-senior-engineer`; when it can't
+# verify something itself (instance state, researcher taste), it applies `needs-human` with a structured
+# question instead. See AGENTS.md "GitHub-native SWE pipeline (BYOK)" for the full trust model this
+# implements.
+#
+# Fails gracefully while the dedicated senior-engineer GitHub App / its secrets don't exist yet: the
+# `resolve` job's secrets-check step logs a clear skip line instead of erroring, and every downstream job is
+# gated on that check passing.
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to run senior-engineer adjudication against (its current head)"
+        required: true
+        type: number
+      summoned_by:
+        description: "Set by an automated dispatcher (e.g. reconcile-prs.yml) that also applies needs-senior-engineer for this same summons, so the loop guard below runs against this dispatch instead of exempting it (the guard itself counts adjudication comments, not this marker). Leave unset for a bare human/manual dispatch, which stays exempt from the loop guard."
+        required: false
+        type: string
+
+concurrency:
+  group: senior-engineer-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  resolve:
+    name: resolve
+    runs-on: ubuntu-latest
+    # Coarse pre-filter only (mirrors implement-on-ready.yml/review-on-pr.yml): the authoritative gate is the
+    # "Resolve + authorize PR" step below, which re-fetches the PR fresh via the shared canonical-login
+    # helper before any token is minted. Allowlist = the researcher + the two engineer Apps (same set as
+    # implement-on-ready.yml's ALLOWLIST) -- any of the three can be the one applying `needs-senior-engineer`
+    # (a human, the implementor asking for help, or the reconciler's/review-on-pr.yml's round-budget trip via
+    # the codex token).
+    if: |
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'needs-senior-engineer'
+        && contains(fromJSON('["antondelafuente","claude-code-engineer[bot]","codex-engineer[bot]","app/claude-code-engineer","app/codex-engineer"]'), github.event.sender.login))
+      || (github.event_name == 'workflow_dispatch'
+        && contains(fromJSON('["antondelafuente","claude-code-engineer[bot]","codex-engineer[bot]","app/claude-code-engineer","app/codex-engineer"]'), github.actor))
+    outputs:
+      pr_number: ${{ steps.resolve_pr.outputs.pr_number }}
+      head_ref: ${{ steps.resolve_pr.outputs.head_ref }}
+      base_ref: ${{ steps.resolve_pr.outputs.base_ref }}
+      configured: ${{ steps.secrets_check.outputs.configured }}
+      loop_trip: ${{ steps.loop_guard.outputs.trip }}
+      loop_count: ${{ steps.loop_guard.outputs.count }}
+    steps:
+      # Checkout runs FIRST (same rationale as every other pipeline workflow): the authorize step below
+      # sources the canonical-login helper from the working tree, which must exist before it's sourced.
+      - name: Checkout base branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout v7.0.0
+        with:
+          # Explicit ref, not the default: without it, a `pull_request` trigger checks out the PR's
+          # untrusted MERGE ref (actions/checkout's default for that event), not the base branch this
+          # comment claims -- and the step below sources canonical-login.sh from this checkout before
+          # authorization runs. base.ref on `pull_request`; this workflow's own ref (its default-branch
+          # invocation) on workflow_dispatch.
+          ref: ${{ github.event.pull_request.base.ref || github.ref }}
+          persist-credentials: false
+
+      # Re-verify BEFORE minting any token: same-repo (no forks), PR open, and its author is exactly the
+      # claude engineer bot (senior-engineer only adjudicates the implementor's own PRs). For the labeled
+      # path, also re-confirm the label is CURRENTLY present (closes the same workflow_dispatch-vs-freshness
+      # gap implement-on-ready.yml's authorize step closes for `ready`); the manual workflow_dispatch lever
+      # deliberately skips that specific check -- it may run with no label present at all.
+      - name: Resolve + authorize PR
+        id: resolve_pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          LABEL_EVENT_PR: ${{ github.event.pull_request.number }}
+          DISPATCH_PR: ${{ github.event.inputs.pr_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          source "$GITHUB_WORKSPACE/.github/scripts/canonical-login.sh"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            PR_NUMBER="$DISPATCH_PR"
+          else
+            PR_NUMBER="$LABEL_EVENT_PR"
+          fi
+          [ -n "$PR_NUMBER" ] || { echo "::error::no PR number resolved for this event"; exit 1; }
+
+          pr_json=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json author,isCrossRepository,state,headRefName,baseRefName,labels)
+          author=$(jq -r '.author.login' <<<"$pr_json")
+          is_cross=$(jq -r '.isCrossRepository' <<<"$pr_json")
+          state=$(jq -r '.state' <<<"$pr_json")
+          author_canon=$(canonical_login "$author")
+
+          if [ "$is_cross" != "false" ]; then
+            echo "::error::PR #$PR_NUMBER is a fork PR; refusing to run senior-engineer against it"
+            exit 1
+          fi
+          if [ "$author_canon" != "claude-code-engineer[bot]" ]; then
+            echo "::error::PR #$PR_NUMBER author '$author' is not the claude engineer bot; refusing to run"
+            exit 1
+          fi
+          if [ "$state" != "OPEN" ]; then
+            echo "::error::PR #$PR_NUMBER is not open (state: $state); refusing to run"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" != "workflow_dispatch" ] && ! jq -e 'any(.labels[]; .name == "needs-senior-engineer")' <<<"$pr_json" >/dev/null; then
+            echo "::error::PR #$PR_NUMBER no longer carries needs-senior-engineer; refusing to run"
+            exit 1
+          fi
+
+          {
+            echo "pr_number=$PR_NUMBER"
+            echo "head_ref=$(jq -r '.headRefName' <<<"$pr_json")"
+            echo "base_ref=$(jq -r '.baseRefName' <<<"$pr_json")"
+          } >> "$GITHUB_OUTPUT"
+
+      # Loop guard: the senior engineer must never run more than once per `needs-senior-engineer` SUMMONS,
+      # and if a summons REAPPEARS N=2 times on one PR without converging (i.e. this would be its 3rd+
+      # summons), escalate straight to needs-human instead of running another adjudication round.
+      #
+      # Counted by ADJUDICATION COMMENT, not label-application timeline event (agentic-engineering#65 round
+      # 10 -- supersedes rounds 7-9's label-event counting and their recorded recovery-model boundary, which
+      # the round-10 review correctly refuted). The label was doing double duty as both the escalation state
+      # AND the summons counter: the reconciler's sweep has to treat a present label as "already being
+      # handled" and skip it (or it would double-dispatch), which means a labeled-but-never-adjudicated PR
+      # (a failed dispatch, a failed rollback) could never be retried -- permanently stranded. Splitting the
+      # two signals apart fixes both sides at once: a `senior-engineer-agent[bot]` comment is direct evidence
+      # a summons actually RAN (the CLI only posts one after completing); a transport failure (failed
+      # dispatch, failed label add/remove) never produces one, so it can no longer consume budget here, and
+      # label churn from retries becomes harmless bookkeeping the reconciler is free to re-drive (see that
+      # workflow's conditional needs-senior-engineer skip).
+      #
+      # The count resets at the more recent of: the last codex-engineer[bot] APPROVED review (real forward
+      # progress -- whatever drove prior summonses is resolved), or the last `needs-human` clearance (a
+      # person deliberately granted the automated loop a fresh start). It does NOT reset on
+      # needs-senior-engineer's own routine clearing (the "guided" outcome below clears that label on every
+      # non-escalated run) -- resetting there would zero the count on every single cycle and the guard could
+      # never trip.
+      - name: Loop guard — count senior-engineer adjudication comments
+        id: loop_guard
+        if: github.event_name == 'pull_request' || github.event.inputs.summoned_by != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.resolve_pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          last_approved_ts=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s -r '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            add // [] | map(select(.state == "APPROVED" and ((.user.login | canon_login) == "codex-engineer[bot]")))
+              | sort_by(.submitted_at) | last | .submitted_at // ""
+          ')
+          last_human_clear_ts=$(gh api "repos/$REPO/issues/$PR_NUMBER/events" --paginate | jq -s -r '
+            add // [] | map(select(.event == "unlabeled" and .label.name == "needs-human"))
+              | sort_by(.created_at) | last | .created_at // ""
+          ')
+          reset_ts="$last_approved_ts"
+          if [[ "$last_human_clear_ts" > "$reset_ts" ]]; then
+            reset_ts="$last_human_clear_ts"
+          fi
+
+          prior_count=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg reset "$reset_ts" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            add // [] | map(select(((.user.login | canon_login) == "senior-engineer-agent[bot]") and (.created_at > $reset))) | length
+          ')
+          count=$((prior_count + 1))
+          echo "senior-engineer has posted $prior_count adjudication comment(s) on PR #$PR_NUMBER since ${reset_ts:-the PR opened}; this run would be summons #$count"
+          if [ "$prior_count" -ge 2 ]; then
+            trip="true"
+          else
+            trip="false"
+          fi
+          echo "trip=$trip" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      # Fail gracefully while the App/secrets don't exist yet: a step-level (not job-level) check, since
+      # `secrets` isn't available in a job's own `if:` context. Every downstream job gates on this output
+      # instead of failing the run.
+      - name: Check senior-engineer secrets configured
+        id: secrets_check
+        env:
+          APP_ID: ${{ secrets.SENIOR_ENGINEER_APP_ID }}
+          APP_KEY: ${{ secrets.SENIOR_ENGINEER_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
+            echo "senior-engineer App secrets (SENIOR_ENGINEER_APP_ID / SENIOR_ENGINEER_APP_PRIVATE_KEY) are not configured on this repo yet; skipping this run"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  loop-guard-escalate:
+    name: loop-guard-escalate
+    needs: resolve
+    if: needs.resolve.outputs.configured == 'true' && needs.resolve.outputs.loop_trip == 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Mint senior-engineer App token
+        id: mint_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # actions/create-github-app-token v3.2.0
+        with:
+          app-id: ${{ secrets.SENIOR_ENGINEER_APP_ID }}
+          private-key: ${{ secrets.SENIOR_ENGINEER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Escalate — loop guard tripped
+        env:
+          GH_TOKEN: ${{ steps.mint_token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          LOOP_COUNT: ${{ needs.resolve.outputs.loop_count }}
+        run: |
+          set -euo pipefail
+          # Same four-part structured-escalation contract as the adjudicate job's agent-authored comment
+          # (AGENTS.md's senior-engineer leg description) -- a human landing on a needs-human PR must get the
+          # same decision/options/lean/default shape regardless of which path escalated it
+          # (agentic-engineering#65 round 3, P1).
+          body=$(printf '%s\n\n**Decision needed:** %s\n\n**Options:** %s\n\n**Lean:** %s\n\n**Default if unanswered:** %s\n' \
+            "Senior engineer: this would be adjudication summons #$LOOP_COUNT on this PR (the 2-reappearance loop guard, counted by adjudication comment) without the underlying issue resolving. Escalating to \`needs-human\` instead of running another adjudication round — repeated summonses without progress means the automated guidance loop isn't converging and needs a person's judgment on what's actually stuck." \
+            "whether to keep pushing this PR through automated adjudication rounds, or to have a person take over — resolve the disagreement directly, descope the blocking slice into a follow-up issue, or make another product-taste call the automation can't verify on its own." \
+            "(a) a person reviews the PR's history and posts the guidance/decision that lets the loop converge; (b) a person identifies the blocking diff slice and files it as a follow-up issue, then lands the remainder; (c) a person closes or otherwise redirects the PR if it's no longer the right shape." \
+            "without a person's judgment on what specifically is stuck, this workflow cannot pick between (a)/(b)/(c) itself — that is exactly why the loop guard hands off here instead of running a third-plus adjudication round." \
+            "the PR stays labeled \`needs-human\` and no further automated senior-engineer or addressing rounds run against it until a person acts.")
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$body"
+          # No `|| true` here: a claimed-but-undelivered escalation is exactly the swallowed-escalation
+          # class this pipeline exists to eliminate -- the escalation only exists once needs-human is
+          # actually on the PR, so a failed mutation must fail this job, not pass silently.
+          if ! gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-human --remove-label needs-senior-engineer; then
+            echo "::error::failed to add needs-human / remove needs-senior-engineer on PR #$PR_NUMBER after posting the loop-guard escalation comment -- the escalation is not delivered until the label mutation succeeds"
+            exit 1
+          fi
+
+  adjudicate:
+    name: adjudicate
+    needs: resolve
+    if: needs.resolve.outputs.configured == 'true' && needs.resolve.outputs.loop_trip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # Recorded before anything else in this job so the outcome-verification step below can tell apart a
+      # comment/label the agent produces THIS run from one that was already sitting on the PR from a prior
+      # (possibly failed or unrelated) run.
+      - name: Record adjudication start time
+        id: run_started
+        run: echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # `adjudicate` is a separate job from `resolve` -- jobs don't share a workspace, so this runner
+      # starts empty and the prompt render below (which `cat`s a file from the working tree) needs its
+      # own checkout first. Pinned to the base ref `resolve` already authorized against (not the untrusted
+      # PR head) since this is control-plane content, same as `resolve`'s own base checkout.
+      - name: Checkout base branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout v7.0.0
+        with:
+          ref: ${{ needs.resolve.outputs.base_ref }}
+          persist-credentials: false
+
+      # agentic-engineering#65 P0-1 (codex review): this prompt previously told the agent to fetch the PR's
+      # reviews and full comment thread itself via live `gh api` calls while holding comment/label write
+      # credentials -- on this public repo, anyone can review or comment on an open PR, so that raw fetch
+      # let arbitrary non-allowlisted authors place text directly into the adjudicator's context. Snapshot
+      # and filter it here instead, mirroring address-review.yml's pattern (agentic-engineering#52). Unlike
+      # that workflow, the SAME allowlist applies to both reviews and comments: the adjudicator needs the
+      # full cross-actor picture (the codex reviewer's findings, the researcher's own input, the
+      # implementor's responses/disputes, and its own prior guidance on a repeat summons), not just the
+      # reviewer's verdicts plus the implementor's own words. Everything else is dropped and logged (audit
+      # evidence in the run log), never reaching the model. antondelafuente/automated-researcher#520 independently closed the
+      # same class upstream via a workflow-assembled snapshot; this repo's own fix (below) predates that PR
+      # and is kept as the mechanism here rather than swapped for its bash-loop rendering, since it already
+      # matches this repo's own address-review.yml convention.
+      - name: Fetch + filter PR thread
+        id: pr_thread
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          ALLOW='["antondelafuente","codex-engineer[bot]","claude-code-engineer[bot]","senior-engineer-agent[bot]"]'
+
+          reviews_json=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s 'add // []')
+          comments_json=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s 'add // []')
+
+          # jq can't source canonical-login.sh's bash function, so the same "app/<slug>" -> "<slug>[bot]"
+          # remap is duplicated here as a jq def (mirrors address-review.yml's / review-on-pr.yml's own
+          # canon_login jq def).
+          kept_reviews=$(jq --argjson allow "$ALLOW" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            map(select((.body // "") != "" and ((.user.login | canon_login) as $c | ($allow | index($c)) != null)))
+          ' <<<"$reviews_json")
+          kept_comments=$(jq --argjson allow "$ALLOW" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            map(select((.user.login | canon_login) as $c | ($allow | index($c)) != null))
+          ' <<<"$comments_json")
+          dropped=$(jq -n --argjson allow "$ALLOW" --argjson r "$reviews_json" --argjson c "$comments_json" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            [($r[] | select((.user.login|canon_login) as $x | ($allow|index($x))==null) | {id, kind:"review", author:.user.login}),
+             ($c[] | select((.user.login|canon_login) as $x | ($allow|index($x))==null) | {id, kind:"comment", author:.user.login})]
+          ')
+
+          reviews_total=$(jq 'length' <<<"$reviews_json")
+          comments_total=$(jq 'length' <<<"$comments_json")
+          kept_reviews_count=$(jq 'length' <<<"$kept_reviews")
+          kept_comments_count=$(jq 'length' <<<"$kept_comments")
+          dropped_count=$(jq 'length' <<<"$dropped")
+
+          echo "::notice::PR #$PR_NUMBER thread snapshot: $kept_reviews_count/$reviews_total review(s) and $kept_comments_count/$comments_total comment(s) kept (allowlisted authors); $dropped_count dropped: $(jq -c . <<<"$dropped")"
+
+          combined=$(jq -n --argjson r "$kept_reviews" --argjson c "$kept_comments" '
+            ($r | map({ts: .submitted_at, kind: "review", user: .user.login, state, body})) +
+            ($c | map({ts: .created_at, kind: "comment", user: .user.login, state: null, body}))
+            | sort_by(.ts)
+          ')
+          rendered=$(jq -r '
+            .[] | (if .kind == "review" then "### Review (" + .state + ") by " + .user + " at " + .ts
+                   else "### Comment by " + .user + " at " + .ts end)
+              + "\n" + (.body // "") + "\n"
+          ' <<<"$combined")
+
+          kept_total=$((kept_reviews_count + kept_comments_count))
+          if [ "$kept_total" -gt 0 ]; then
+            thread="Reviews and comments from allowlisted authors ($kept_reviews_count of $reviews_total review(s), $kept_comments_count of $comments_total comment(s); $dropped_count non-allowlisted entries omitted and logged in the workflow run, never seen by you):
+
+          $rendered"
+          else
+            thread="No reviews or comments from allowlisted authors were found ($reviews_total review(s), $comments_total comment(s) total; any non-allowlisted entries were omitted and logged in the workflow run)."
+          fi
+
+          # $thread embeds review/comment bodies verbatim, so a fixed delimiter could be matched by a body
+          # line and used to inject extra keys into $GITHUB_OUTPUT -- a per-run random delimiter closes it
+          # off (same fix as address-review.yml's own PR_THREAD step).
+          delim="thread_$(openssl rand -hex 20)"
+          {
+            echo "thread<<$delim"
+            printf '%s\n' "$thread"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Render senior-engineer prompt
+        id: render_prompt
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ needs.resolve.outputs.head_ref }}
+          BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+          PR_THREAD: ${{ steps.pr_thread.outputs.thread }}
+        run: |
+          set -euo pipefail
+          # patsub_replacement is on by default on bash 5.2+ (this runner's bash, antondelafuente/automated-researcher#520):
+          # it makes `&` in the replacement word expand to the matched pattern and gives backslash special
+          # meaning, so any `&`/`\` in $PR_THREAD (freeform authored text) would corrupt the substitution
+          # below. Disabling it restores the pre-5.2 behavior where the replacement word is inserted
+          # literally.
+          shopt -u patsub_replacement
+          body="$(cat .github/prompts/senior-engineer.md)"
+          body="${body//\{\{PR_NUMBER\}\}/$PR_NUMBER}"
+          body="${body//\{\{REPO\}\}/$REPO}"
+          body="${body//\{\{HEAD_REF\}\}/$HEAD_REF}"
+          body="${body//\{\{BASE_REF\}\}/$BASE_REF}"
+          body="${body//\{\{PR_THREAD\}\}/$PR_THREAD}"
+
+          # $body now embeds PR_THREAD, which carries review/comment bodies verbatim -- a fixed delimiter
+          # could be matched by a body line and used to inject extra keys into $GITHUB_OUTPUT (same risk
+          # class already fixed in address-review.yml for the same reason); a per-run random delimiter
+          # closes it off.
+          delim="prompt_$(openssl rand -hex 20)"
+          {
+            echo "prompt<<$delim"
+            printf '%s\n' "$body"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint senior-engineer App token
+        id: mint_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # actions/create-github-app-token v3.2.0
+        with:
+          app-id: ${{ secrets.SENIOR_ENGINEER_APP_ID }}
+          private-key: ${{ secrets.SENIOR_ENGINEER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      # Same pin as every other CLI-running leg of this pipeline (antondelafuente/automated-researcher#387/antondelafuente/automated-researcher#388): the
+      # wrapper action's own bun/agent-SDK harness crashes at startup; the raw pinned CLI runs cleanly.
+      - name: Install pinned Claude Code
+        id: install_claude
+        run: |
+          set -euo pipefail
+          npm install -g @anthropic-ai/claude-code@2.1.207
+          echo "path=$(command -v claude)" >> "$GITHUB_OUTPUT"
+
+      # This is the ONLY checkout of the PR's own head branch content, happening after authorization is
+      # already done from the trusted base branch checkout in the `resolve` job. The senior-engineer App
+      # token has Contents:read only, so this working tree is read-only in effect regardless of what the
+      # agent attempts.
+      - name: Checkout PR head branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout v7.0.0
+        with:
+          ref: ${{ needs.resolve.outputs.head_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch base ref
+        env:
+          BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+        run: git fetch --no-tags origin "$BASE_REF"
+
+      - name: Run pinned Claude Code CLI (senior-engineer)
+        id: run_claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # So `gh` calls the agent makes from its own Bash tool are authorized as the senior-engineer App.
+          GH_TOKEN: ${{ steps.mint_token.outputs.token }}
+          PROMPT: ${{ steps.render_prompt.outputs.prompt }}
+          CLAUDE_BIN: ${{ steps.install_claude.outputs.path }}
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          jq -nc --arg content "$PROMPT" '{"type":"user","message":{"role":"user","content":$content}}' \
+            | "$CLAUDE_BIN" -p --input-format stream-json --output-format stream-json --verbose \
+                --model claude-fable-5 \
+                --allowedTools Bash,Read,Grep,Glob \
+                --json-schema '{"type":"object","required":["status"],"properties":{"status":{"type":"string","enum":["guided","escalated"]}}}' \
+            | tee /tmp/claude_stream.jsonl
+
+          # Same validation as every other CLI-running leg (implement-on-ready.yml design-review finding 1):
+          # don't let a CLI run that exited 0 but produced no result event / no structured_output fall
+          # through silently.
+          structured=$(jq -c 'select(.type=="result") | .structured_output // empty' /tmp/claude_stream.jsonl | tail -n1)
+          if [ -z "$structured" ] || [ "$structured" = "null" ]; then
+            echo "::error::claude CLI exited 0 but produced no structured_output in its result event"
+            exit 1
+          fi
+          echo "status=$(echo "$structured" | jq -r '.status // "escalated"')" >> "$GITHUB_OUTPUT"
+
+      # Outcomes are VERIFIED, never self-reported: the CLI's structured_output is the agent's own claim,
+      # not proof. Before anything downstream treats this run as having delivered guidance or escalation,
+      # confirm the claimed outcome actually exists on GitHub -- for `guided`, a senior-engineer-agent[bot]
+      # comment containing the @claude-code-engineer mention, created after this run started; for
+      # `escalated`, BOTH the needs-human label AND the structured escalation comment the prompt's step 4
+      # requires (AGENTS.md's senior-engineer leg description), with the label proven to have been APPLIED
+      # during this run (not merely present) and the comment authored by senior-engineer-agent[bot] after
+      # this run started (agentic-engineering#65 round 2, P0-1) -- a pre-existing needs-human label from an
+      # earlier/unrelated escalation, or a comment with no matching label mutation this run, must not pass.
+      # A mismatch is treated as the failure path (this step exits non-zero, so `success()` below goes false
+      # and the `failure()` step fires instead) -- never clear needs-senior-engineer on an unverified claim.
+      - name: Verify adjudication outcome
+        id: verify_outcome
+        env:
+          GH_TOKEN: ${{ steps.mint_token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          STATUS: ${{ steps.run_claude.outputs.status }}
+          STARTED_AT: ${{ steps.run_started.outputs.started_at }}
+        run: |
+          set -euo pipefail
+          case "$STATUS" in
+            guided)
+              found=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg started "$STARTED_AT" '
+                add // [] | any(.[]; .user.login == "senior-engineer-agent[bot]"
+                  and .created_at > $started
+                  and (.body | contains("@claude-code-engineer")))
+              ')
+              if [ "$found" != "true" ]; then
+                echo "::error::status=guided was self-reported for PR #$PR_NUMBER, but no senior-engineer-agent[bot] comment mentioning @claude-code-engineer created after $STARTED_AT was found -- treating the self-report as unverified/failed"
+                exit 1
+              fi
+              ;;
+            escalated)
+              label_added_now=$(gh api "repos/$REPO/issues/$PR_NUMBER/events" --paginate | jq -s --arg started "$STARTED_AT" '
+                add // [] | any(.[]; .event == "labeled" and .label.name == "needs-human" and .created_at > $started)
+              ')
+              has_label=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels \
+                | jq -e 'any(.labels[]; .name == "needs-human")' >/dev/null 2>&1 && echo true || echo false)
+              if [ "$has_label" != "true" ] || [ "$label_added_now" != "true" ]; then
+                echo "::error::status=escalated was self-reported for PR #$PR_NUMBER, but needs-human is either not present or was not applied during this run (started $STARTED_AT) -- a pre-existing label is not a delivered escalation; treating the self-report as unverified/failed"
+                exit 1
+              fi
+              # AGENTS.md's structured-escalation contract is FOUR parts (decision, options, lean, default) --
+              # the prompt requires each as its own literal bold label (agentic-engineering#65 round 3, P0),
+              # so any comment merely existing is not enough: it must carry all four labels to count as the
+              # structured escalation the label mutation below is gated on.
+              has_comment=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg started "$STARTED_AT" '
+                add // [] | any(.[]; .user.login == "senior-engineer-agent[bot]" and .created_at > $started
+                  and (.body | contains("**Decision needed:**"))
+                  and (.body | contains("**Options:**"))
+                  and (.body | contains("**Lean:**"))
+                  and (.body | contains("**Default if unanswered:**")))
+              ')
+              if [ "$has_comment" != "true" ]; then
+                echo "::error::status=escalated was self-reported for PR #$PR_NUMBER, but no senior-engineer-agent[bot] comment created after $STARTED_AT carrying all four required labels (Decision needed / Options / Lean / Default if unanswered) was found -- a comment lacking the full structure is not the escalation AGENTS.md promises; treating the self-report as unverified/failed"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::unrecognized status '$STATUS' from claude CLI structured output"
+              exit 1
+              ;;
+          esac
+          echo "verified outcome '$STATUS' for PR #$PR_NUMBER against actual GitHub state"
+
+      # The WORKFLOW owns needs-senior-engineer's entire lifecycle -- the agent never touches this label
+      # (see the prompt). This step only runs once the claimed outcome has been VERIFIED against actual
+      # GitHub state above (not merely self-reported); `if: success()` is the default step condition, made
+      # explicit here so it isn't mistaken for `always()`. No `|| true` on the removal: a label wrongly
+      # left in place after a verified outcome means the PR can't be re-summoned for adjudication, which is
+      # itself a failure state someone must see, not one to swallow.
+      - name: Clear needs-senior-engineer
+        if: success()
+        env:
+          GH_TOKEN: ${{ steps.mint_token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if ! gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label needs-senior-engineer; then
+            echo "::error::verified outcome for PR #$PR_NUMBER but failed to remove needs-senior-engineer -- the label is now incorrectly still present, blocking re-summon via a future labeled event"
+            exit 1
+          fi
+
+      # On any failure in this job (CLI crash, timeout, malformed structured output, or a self-reported
+      # outcome that verification couldn't find on GitHub), `needs-senior-engineer` must stay in place --
+      # it is the retry signal (a re-labeled event or a manual workflow_dispatch re-summons this workflow).
+      # Silently clearing it here would mark an unhandled PR as handled, so this emits an explicit ::error
+      # for run-log visibility instead of touching the label.
+      - name: Adjudication failed — leaving needs-senior-engineer in place
+        if: failure()
+        run: |
+          echo "::error::senior-engineer adjudication for PR #${{ needs.resolve.outputs.pr_number }} did not complete or its self-reported outcome could not be verified on GitHub (CLI crash, timeout, malformed structured output, or a guided/escalated claim not matching actual PR state) -- leaving needs-senior-engineer in place as the retry signal, not clearing it"
