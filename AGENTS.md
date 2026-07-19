@@ -33,7 +33,7 @@ native approval. A crashed/garbled review never reads as clean.
 ## GitHub-native SWE pipeline (BYOK) — event-driven `ready` → merged PR
 
 For this repo (and `automated-researcher`, where this capability shipped first — see
-automated-researcher#378 / this repo's own agentic-engineering#43), the `ship-change` lifecycle above can run **without a
+antondelafuente/automated-researcher#378 / this repo's own agentic-engineering#43), the `ship-change` lifecycle above can run **without a
 session dispatching it**: a `ready` label launches an execution-tier Claude implementor via GitHub Actions,
 and PR events run the cross-family Codex review natively. This section is this repo's own copy of that
 capability — it is what this PR (agentic-engineering#44) adds, and it is deliberately the **last** change to this repo shipped
@@ -97,7 +97,7 @@ itself, ships by labeling an Issue `ready`.
     content — privacy did no work in the original private-repo statement once traced through; the allowlist
     does. `checks.yml`'s required-status job carries the same residual risk on the same basis: it passes the
     `ANTHROPIC_API_KEY` repo secret to `.aar-ci/checks.sh` (read-only `GITHUB_TOKEN`, no write permissions)
-    so `fake_home_smoke.sh` can run `claude plugin` headlessly on a GitHub runner (automated-researcher#396).
+    so `fake_home_smoke.sh` can run `claude plugin` headlessly on a GitHub runner (antondelafuente/automated-researcher#396).
 - **Concurrency is per-issue dedup, not a worker pool.** `implement-on-ready.yml`'s
   `concurrency: group: implement-issue-<n>` only prevents a duplicate run on the *same* issue. There is
   **no global cap** — GitHub Actions `concurrency` groups don't provide one. The spend guard is the
@@ -177,13 +177,13 @@ itself, ships by labeling an Issue `ready`.
   (round-budgeted; escalates to `needs-senior-engineer` instead of nudging forever once the head stops
   moving — see the senior-engineer leg above); `mergeable == MERGEABLE` with no completed codex review at
   the current head → re-fire `review-on-pr.yml` via the actuator above (the residual true-event-loss case,
-  if one exists). It also skips any PR already carrying `needs-senior-engineer` or `needs-human` — those
-  mean another leg of the pipeline (or a person) is already handling it.
+  if one exists). It also skips any PR already carrying `needs-senior-engineer`, `needs-human`, or
+  `needs-dispatcher` — those mean another leg of the pipeline (or a person) is already handling it.
 - **Round-limit escalation now summons the senior engineer, not a human directly
   (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
   on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same
-  hard checks as the reconciler's own dispatch — an existing `needs-senior-engineer`/`needs-human` label
-  skips it, and the PR head must not have moved since the review was submitted). Reusing
+  hard checks as the reconciler's own dispatch — an existing `needs-senior-engineer`/`needs-human`/
+  `needs-dispatcher` label skips it, and the PR head must not have moved since the review was submitted). Reusing
   agentic-engineering#53's round counting: once a PR reaches its consecutive-`CHANGES_REQUESTED` round
   limit, the pipeline applies `needs-senior-engineer` (summoning the leg above) with the codex reviewer's
   consolidated report attached, instead of escalating straight to `needs-human` — the adjudicator gets first
@@ -266,8 +266,11 @@ agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reope
 allowlisted sender** (the researcher or one of the two engineer bots) within minutes — two independent
 blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses) against
 `.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
-(`DO`/`SKIP`/`ASK`), an optional body-edit, and (for `DO`) a wave number — posted as a single idempotent
-on-ticket assessment comment, never a label or body write. This repo is public, so an Issue filed or
+(`DO`/`SKIP`/`ASK`), an optional body-edit, and (for `DO`) a provisional wave guess based on this ticket's
+own expected footprint — posted as a single idempotent on-ticket assessment comment, never a label or body
+write. Assessment is strictly per-ticket (one issue per run, never a batch), so this wave guess cannot be
+compared against any other open DO ticket; actual wave/serialization composition across tickets is a
+researcher judgment made at flip time, not an automated output. This repo is public, so an Issue filed or
 reopened by anyone else does NOT get this event-driven pass (it would otherwise let an outside filer trigger
 paid model calls for free) — it is instead picked up by the weekly backstop sweep below, on that sweep's own
 cadence rather than within minutes. A weekly backstop sweep (`schedule`) catches issues an event missed —

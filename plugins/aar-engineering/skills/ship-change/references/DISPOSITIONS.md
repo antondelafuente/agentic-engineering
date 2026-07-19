@@ -30,8 +30,11 @@ agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reope
 allowlisted sender** (the researcher or one of the two engineer bots) within minutes — two independent
 blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses) against
 `.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
-(`DO`/`SKIP`/`ASK`), an optional body-edit, and (for `DO`) a wave number — posted as a single idempotent
-on-ticket assessment comment, never a label or body write. This repo is public, so an Issue filed or
+(`DO`/`SKIP`/`ASK`), an optional body-edit, and (for `DO`) a provisional wave guess based on this ticket's
+own expected footprint — posted as a single idempotent on-ticket assessment comment, never a label or body
+write. Assessment is strictly per-ticket (one issue per run, never a batch), so this wave guess cannot be
+compared against any other open DO ticket; actual wave/serialization composition across tickets is a
+researcher judgment made at flip time, not an automated output. This repo is public, so an Issue filed or
 reopened by anyone else does NOT get this event-driven pass (it would otherwise let an outside filer trigger
 paid model calls for free) — it is instead picked up by the weekly backstop sweep below, on that sweep's own
 cadence rather than within minutes. A weekly backstop sweep (`schedule`) catches issues an event missed —

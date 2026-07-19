@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared exact-set coverage validator for triage-assess.yml (ported from antondelafuente/automated-researcher PR #456 via
+# Shared exact-set coverage validator for triage-assess.yml (ported from antondelafuente/automated-researcher#456 via
 # agentic-engineering#63): a confidently incomplete/corrupt model output is worse than none, so every model
 # output that carries a per-ticket array — both blind assessments (Fable, Sol) and the sighted adjudication —
 # is checked here, immediately after parsing and before anything downstream consumes it. Asserts the

@@ -1,6 +1,6 @@
 name: address-review
 
-# GitHub-native SWE pipeline, mention leg (automated-researcher#398 / automated-researcher#378's missing return path). An
+# GitHub-native SWE pipeline, mention leg (antondelafuente/automated-researcher#398 / antondelafuente/automated-researcher#378's missing return path). An
 # allowlisted mention comment on a bot-authored PR re-dispatches the claude engineer implementor onto the
 # SAME PR branch to address review findings; pushing fires `synchronize`, which re-runs review-on-pr.yml
 # automatically (its own cancel-in-progress handles stale rounds — this workflow never invokes the review
@@ -19,7 +19,7 @@ jobs:
   address:
     name: address
     runs-on: ubuntu-latest
-    # Job-level (not workflow-level) concurrency, deliberately (automated-researcher#400): a job whose
+    # Job-level (not workflow-level) concurrency, deliberately (antondelafuente/automated-researcher#400): a job whose
     # `if:` evaluates false is skipped and never enters its concurrency group, so a non-matching comment
     # (no mention, wrong author, etc.) can't cancel an in-flight addressing round on the same PR. Workflow-
     # level concurrency joins the group as soon as the run is triggered, before any job `if:` is evaluated,
@@ -27,7 +27,7 @@ jobs:
     concurrency:
       group: address-pr-${{ github.event.issue.number }}
       cancel-in-progress: true
-    # Coarse pre-filter only (mirrors implement-on-ready.yml automated-researcher#381): the authoritative
+    # Coarse pre-filter only (mirrors implement-on-ready.yml antondelafuente/automated-researcher#381): the authoritative
     # gate is the "Resolve + authorize PR" step below, which re-fetches the PR fresh (same-repo, real
     # author, open state) via the shared canonical-login helper before any token is minted. `issue_comment`
     # fires for comments on plain Issues too, not just PRs — `github.event.issue.pull_request` is only
@@ -101,7 +101,7 @@ jobs:
       # identity that ever submits a genuine review in this pipeline) and comments from the researcher or
       # the claude engineer bot itself (its own prior responses) are kept — everything else is dropped and
       # logged (audit evidence in the run log), never reaching the model. Same allowlists review-on-pr.yml
-      # already established for this exact purpose (automated-researcher#389).
+      # already established for this exact purpose (antondelafuente/automated-researcher#389).
       - name: Fetch + filter PR thread
         id: pr_thread
         env:
@@ -196,7 +196,7 @@ jobs:
           # triggering comment's own raw text, from an ALLOWLISTED author but not otherwise trusted
           # content. A fixed delimiter ("PROMPT_EOF") could be matched by a line inside that comment
           # body and used to terminate the heredoc early, injecting extra keys into $GITHUB_OUTPUT.
-          # Same fix already applied in review-on-pr.yml (automated-researcher#389) for the same class
+          # Same fix already applied in review-on-pr.yml (antondelafuente/automated-researcher#389) for the same class
           # of embedded-untrusted-body risk: a per-run random delimiter closes it off.
           delim="prompt_$(openssl rand -hex 20)"
           {
@@ -214,7 +214,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      # Same pin as implement-on-ready.yml (automated-researcher#387/#388) — the wrapper action's own
+      # Same pin as implement-on-ready.yml (antondelafuente/automated-researcher#387/antondelafuente/automated-researcher#388) — the wrapper action's own
       # bun/agent-SDK harness crashes at startup; the raw pinned CLI is verified to run cleanly instead.
       - name: Install pinned Claude Code
         id: install_claude

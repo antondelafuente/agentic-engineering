@@ -1,6 +1,6 @@
 name: review-on-pr
 
-# GitHub-native SWE pipeline, review leg (automated-researcher#378 / agentic-engineering#43). Runs the
+# GitHub-native SWE pipeline, review leg (antondelafuente/automated-researcher#378 / agentic-engineering#43). Runs the
 # cross-family Codex review on PRs opened by the claude engineer bot, and submits a native APPROVE (clean)
 # or REQUEST_CHANGES (findings) review as the codex engineer bot. Human PRs and fork PRs are skipped — they
 # keep the existing manual review path. See AGENTS.md "GitHub-native SWE pipeline (BYOK)" for the trust
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     # Agent-PR predicate (spoof-resistant): the App actor identity, not a title/label/branch-prefix match.
     # Fork PRs never run this job — same-repo `pull_request` only, no secrets ever reach a fork's code.
-    # automated-researcher#381: this is a job-level `if:` (evaluated before any step/shell runs), so it
+    # antondelafuente/automated-researcher#381: this is a job-level `if:` (evaluated before any step/shell runs), so it
     # can't share the canonical_login() shell helper; both known representations of the App identity are
     # checked explicitly instead (event-payload "<slug>[bot]" and CLI/GraphQL "app/<slug>").
     # antondelafuente/automated-researcher#431 / agentic-engineering#63: the workflow_dispatch branch is only a COARSE
@@ -164,22 +164,22 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Fetch prior review history
-        # GitHub-native disposition state (automated-researcher#380): prior codex review rounds + the
+        # GitHub-native disposition state (antondelafuente/automated-researcher#380): prior codex review rounds + the
         # author's issue-comment responses, so the reviewer can adjudicate rather than re-litigating
         # findings the author already fixed or disputed. Read-only `gh api` calls against this same PR —
         # the job's read token suffices.
-        # automated-researcher#389 review: restricted to the pipeline's own trusted identities (originally
+        # antondelafuente/automated-researcher#389 review: restricted to the pipeline's own trusted identities (originally
         # the same allowlist as implement-on-ready.yml's ALLOWLIST; agentic-engineering#63 adds the
         # senior-engineer shepherd, see COMMENT_ALLOW below) — an unrelated or adversarial review/comment
         # must not be able to inject or crowd out disposition context.
-        # automated-researcher#389 round 2: reviews and comments are two distinct streams and are capped
+        # antondelafuente/automated-researcher#389 round 2: reviews and comments are two distinct streams and are capped
         # INDEPENDENTLY, then merged only for rendering. Capping a single merged stream let a burst of
         # trusted-but-routine comments (e.g. the automerge-status notice, owner check-ins) push actual prior
         # codex-engineer[bot] review rounds out of the window even though nothing adversarial happened. The
         # `reviews` stream is also narrowed to codex-engineer[bot] only: it is the sole identity that ever
         # produces genuine prior-review disposition content in this pipeline (submit-verdict's minted app
         # token), so a review submitted under any other identity is never mislabeled as a past Codex verdict.
-        # automated-researcher#389 round 3: within the comments stream, a fixed, zero-disposition-content
+        # antondelafuente/automated-researcher#389 round 3: within the comments stream, a fixed, zero-disposition-content
         # notice (implement-on-ready.yml's "Auto-merge could not be enabled..." message, emitted verbatim by
         # automation with no relation to any finding) is now filtered out before capping, since it is the one
         # deterministically identifiable source of "routine noise" in this pipeline. Beyond that one known
@@ -203,7 +203,7 @@ jobs:
         # agentic-engineering#63: `senior-engineer-agent[bot]` (the in-flight-adjudication shepherd,
         # AGENTS.md's "Senior-engineer leg", ported from antondelafuente/automated-researcher#438) is added to
         # COMMENT_ALLOW below. Its rulings are the convergence mechanism's memory — automated-researcher's
-        # own history (antondelafuente/automated-researcher PR #505) showed a reviewer that never sees the shepherd's ruling re-flags the
+        # own history (antondelafuente/automated-researcher#505) showed a reviewer that never sees the shepherd's ruling re-flags the
         # same finding class the shepherd already settled, and the ladder escalates on a disagreement that
         # only exists because the judge was deaf to the adjudicator. Its escalation notices ("needs-human
         # applied..." / round-limit reached) are legitimate history too — they tell the reviewer the loop
@@ -292,7 +292,7 @@ jobs:
             fi
           fi
 
-          # automated-researcher#389 review: $rendered embeds review/comment BODIES verbatim, so a fixed
+          # antondelafuente/automated-researcher#389 review: $rendered embeds review/comment BODIES verbatim, so a fixed
           # delimiter (previously "HISTORY_EOF") could be matched by a body line and used to inject extra
           # keys into $GITHUB_OUTPUT. A per-run random delimiter closes that off.
           delim="history_$(openssl rand -hex 20)"
@@ -378,7 +378,7 @@ jobs:
           PROMPT
           )
 
-          # automated-researcher#389 review: $prompt embeds prior review/comment bodies (via
+          # antondelafuente/automated-researcher#389 review: $prompt embeds prior review/comment bodies (via
           # $history_section), so a fixed delimiter (previously "PROMPT_EOF") could be matched by a body
           # line and used to inject extra keys into $GITHUB_OUTPUT. A per-run random delimiter closes that
           # off.
@@ -395,7 +395,7 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ":read-only"
-          # Pinned deliberately (automated-researcher#394) so the reviewer model/effort are a conscious
+          # Pinned deliberately (antondelafuente/automated-researcher#394) so the reviewer model/effort are a conscious
           # choice, not whatever the codex-action/CLI pin defaults to. Bump here when moving to a newer
           # model or effort.
           model: gpt-5.6-sol
@@ -554,12 +554,14 @@ jobs:
           set -euo pipefail
 
           # Hard gate (mirroring antondelafuente/automated-researcher#502 point 3): an escalation label already parked this
-          # PR with the senior-engineer leg or a human -- the automated loop must never post another
+          # PR with the senior-engineer leg, a human, or the implementor's own needs-dispatcher
+          # self-escalation (AGENTS.md's escalation section) -- the automated loop must never post another
           # dispatch mention or duplicate escalation on top of that, regardless of round count.
           labels=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           case ",$labels," in
             *,needs-senior-engineer,*) echo "PR #$PR_NUMBER: needs-senior-engineer already set; skipping auto-dispatch/escalation"; exit 0 ;;
             *,needs-human,*) echo "PR #$PR_NUMBER: needs-human already set; skipping auto-dispatch/escalation"; exit 0 ;;
+            *,needs-dispatcher,*) echo "PR #$PR_NUMBER: needs-dispatcher already set; skipping auto-dispatch/escalation"; exit 0 ;;
           esac
 
           # antondelafuente/automated-researcher#505 review round 2/3: the freshness check in the submission step above only
