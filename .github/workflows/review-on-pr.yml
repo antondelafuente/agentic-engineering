@@ -61,7 +61,8 @@ jobs:
       prior_consecutive: ${{ steps.history.outputs.prior_consecutive }}
       round_limit: ${{ steps.history.outputs.round_limit }}
     steps:
-      # Checkout runs FIRST (same rationale as implement-on-ready#381/address-review#398): the resolve step
+      # Checkout runs FIRST (same rationale as antondelafuente/automated-researcher#381 /
+      # antondelafuente/automated-researcher#398): the resolve step
       # below sources the canonical-login helper from the working tree, which must exist before it's
       # sourced. A base-branch checkout is trusted content regardless of which step runs first.
       - name: Checkout base branch

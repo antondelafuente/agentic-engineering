@@ -206,18 +206,21 @@ itself, ships by labeling an Issue `ready`.
   **Recovery model for this conflicted-PR path (agentic-engineering#65 round 10 — supersedes round 9's
   recorded boundary, which the round-10 review correctly refuted: the sweep skipped every
   `needs-senior-engineer` PR unconditionally, so a stranded label was never actually re-evaluated by a later
-  sweep):** `needs-senior-engineer` is a **conditional** skip, not unconditional. On a PR carrying the
-  label, the sweep checks whether a `senior-engineer-agent[bot]` comment postdates the label's most recent
-  application — if so, a summons is genuinely in flight or just completed, and it skips. If not, and the
-  label's most recent application is older than the sweep's own grace window (`SENIOR_ENGINEER_GRACE_SECONDS`,
-  comfortably above senior-engineer.yml's 30-minute CLI timeout), the sweep re-dispatches
+  sweep):** while `needs-senior-engineer` remains applied, its mere presence is the authoritative
+  not-yet-finished signal — the label is never an unconditional, permanent skip. The sweep takes the more
+  recent of the label's latest application and the latest `senior-engineer-agent[bot]` adjudication comment
+  as its reference point; a newer adjudication comment does not by itself prove the run finished (the agent
+  posts it directly mid-run, before its own verify/clear steps), so it only **extends the in-flight grace
+  window** from its own timestamp rather than suppressing recovery indefinitely. Once that reference point is
+  older than the sweep's own grace window (`SENIOR_ENGINEER_GRACE_SECONDS`, comfortably above
+  senior-engineer.yml's 30-minute CLI timeout) with the label still present, the sweep re-dispatches
   `senior-engineer.yml` itself (`summoned_by=reconciler`) rather than leaving the PR stranded — this is what
   actually retries a PR whose dispatch or label rollback both failed, instead of merely asserting that a
   later sweep would. This retry cannot inflate senior-engineer.yml's own loop-guard budget: that guard now
   counts adjudication comments, not label events (see the loop guard above), and a transport failure never
   produces one. Per-call rollback perfection is still not the design goal for the label mutations
-  themselves — a failed add/remove is logged and left for this same conditional-skip-and-re-dispatch check
-  to repair on the next tick, not chased with deeper per-call error handling.
+  themselves — a failed add/remove is logged and left for this same grace-window-and-re-dispatch check to
+  repair on the next tick, not chased with deeper per-call error handling.
 - **Round-limit escalation now summons the senior engineer, not a human directly
   (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
   on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same
