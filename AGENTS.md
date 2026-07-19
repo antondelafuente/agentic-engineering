@@ -81,10 +81,12 @@ itself, ships by labeling an Issue `ready`.
     fresh re-verification against live state before any token is minted. The same allowlist also gates
     *content*, not just triggering: `implement-on-ready.yml` and `address-review.yml` each snapshot and
     filter the issue/PR comment thread (and, for `address-review.yml`, the PR's reviews) to allowlisted
-    authors only before rendering the implementor's prompt, dropping and logging anything else
-    (agentic-engineering#52) — a non-allowlisted account's comment or review never becomes part of what the
-    model treats as spec, even if it's technically readable via the model's own `gh`/API access during the
-    run.
+    authors only before rendering the implementor's prompt; `senior-engineer.yml` does the same for the PR's
+    reviews and comment thread it hands its adjudicator, with `senior-engineer-agent[bot]` additionally in
+    its own allowlist (it may be adjudicating a repeat summons and needs its own prior guidance in view).
+    Anything dropped is logged (agentic-engineering#52, agentic-engineering#65) — a non-allowlisted account's
+    comment or review never becomes part of what the model treats as spec, even if it's technically readable
+    via the model's own `gh`/API access during the run.
   - **Accepted residual risk, re-justified for public:** the implementor agent executes repo-controlled code
     (tests, hooks) while holding its API key and a short-lived write-scoped GitHub token. The allowlist
     predicate above is what makes this acceptable on a *public* repo: it ensures only allowlisted-authored

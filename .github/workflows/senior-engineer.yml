@@ -229,6 +229,84 @@ jobs:
           ref: ${{ needs.resolve.outputs.base_ref }}
           persist-credentials: false
 
+      # agentic-engineering#65 P0-1 (codex review): this prompt previously told the agent to fetch the PR's
+      # reviews and full comment thread itself via live `gh api` calls while holding comment/label write
+      # credentials -- on this public repo, anyone can review or comment on an open PR, so that raw fetch
+      # let arbitrary non-allowlisted authors place text directly into the adjudicator's context. Snapshot
+      # and filter it here instead, mirroring address-review.yml's pattern (agentic-engineering#52). Unlike
+      # that workflow, the SAME allowlist applies to both reviews and comments: the adjudicator needs the
+      # full cross-actor picture (the codex reviewer's findings, the researcher's own input, the
+      # implementor's responses/disputes, and its own prior guidance on a repeat summons), not just the
+      # reviewer's verdicts plus the implementor's own words. Everything else is dropped and logged (audit
+      # evidence in the run log), never reaching the model.
+      - name: Fetch + filter PR thread
+        id: pr_thread
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          ALLOW='["antondelafuente","codex-engineer[bot]","claude-code-engineer[bot]","senior-engineer-agent[bot]"]'
+
+          reviews_json=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s 'add // []')
+          comments_json=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s 'add // []')
+
+          # jq can't source canonical-login.sh's bash function, so the same "app/<slug>" -> "<slug>[bot]"
+          # remap is duplicated here as a jq def (mirrors address-review.yml's / review-on-pr.yml's own
+          # canon_login jq def).
+          kept_reviews=$(jq --argjson allow "$ALLOW" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            map(select((.body // "") != "" and ((.user.login | canon_login) as $c | ($allow | index($c)) != null)))
+          ' <<<"$reviews_json")
+          kept_comments=$(jq --argjson allow "$ALLOW" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            map(select((.user.login | canon_login) as $c | ($allow | index($c)) != null))
+          ' <<<"$comments_json")
+          dropped=$(jq -n --argjson allow "$ALLOW" --argjson r "$reviews_json" --argjson c "$comments_json" '
+            def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+            [($r[] | select((.user.login|canon_login) as $x | ($allow|index($x))==null) | {id, kind:"review", author:.user.login}),
+             ($c[] | select((.user.login|canon_login) as $x | ($allow|index($x))==null) | {id, kind:"comment", author:.user.login})]
+          ')
+
+          reviews_total=$(jq 'length' <<<"$reviews_json")
+          comments_total=$(jq 'length' <<<"$comments_json")
+          kept_reviews_count=$(jq 'length' <<<"$kept_reviews")
+          kept_comments_count=$(jq 'length' <<<"$kept_comments")
+          dropped_count=$(jq 'length' <<<"$dropped")
+
+          echo "::notice::PR #$PR_NUMBER thread snapshot: $kept_reviews_count/$reviews_total review(s) and $kept_comments_count/$comments_total comment(s) kept (allowlisted authors); $dropped_count dropped: $(jq -c . <<<"$dropped")"
+
+          combined=$(jq -n --argjson r "$kept_reviews" --argjson c "$kept_comments" '
+            ($r | map({ts: .submitted_at, kind: "review", user: .user.login, state, body})) +
+            ($c | map({ts: .created_at, kind: "comment", user: .user.login, state: null, body}))
+            | sort_by(.ts)
+          ')
+          rendered=$(jq -r '
+            .[] | (if .kind == "review" then "### Review (" + .state + ") by " + .user + " at " + .ts
+                   else "### Comment by " + .user + " at " + .ts end)
+              + "\n" + (.body // "") + "\n"
+          ' <<<"$combined")
+
+          kept_total=$((kept_reviews_count + kept_comments_count))
+          if [ "$kept_total" -gt 0 ]; then
+            thread="Reviews and comments from allowlisted authors ($kept_reviews_count of $reviews_total review(s), $kept_comments_count of $comments_total comment(s); $dropped_count non-allowlisted entries omitted and logged in the workflow run, never seen by you):
+
+          $rendered"
+          else
+            thread="No reviews or comments from allowlisted authors were found ($reviews_total review(s), $comments_total comment(s) total; any non-allowlisted entries were omitted and logged in the workflow run)."
+          fi
+
+          # $thread embeds review/comment bodies verbatim, so a fixed delimiter could be matched by a body
+          # line and used to inject extra keys into $GITHUB_OUTPUT -- a per-run random delimiter closes it
+          # off (same fix as address-review.yml's own PR_THREAD step).
+          delim="thread_$(openssl rand -hex 20)"
+          {
+            echo "thread<<$delim"
+            printf '%s\n' "$thread"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Render senior-engineer prompt
         id: render_prompt
         env:
@@ -236,6 +314,7 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_REF: ${{ needs.resolve.outputs.head_ref }}
           BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+          PR_THREAD: ${{ steps.pr_thread.outputs.thread }}
         run: |
           set -euo pipefail
           body="$(cat .github/prompts/senior-engineer.md)"
@@ -243,10 +322,17 @@ jobs:
           body="${body//\{\{REPO\}\}/$REPO}"
           body="${body//\{\{HEAD_REF\}\}/$HEAD_REF}"
           body="${body//\{\{BASE_REF\}\}/$BASE_REF}"
+          body="${body//\{\{PR_THREAD\}\}/$PR_THREAD}"
+
+          # $body now embeds PR_THREAD, which carries review/comment bodies verbatim -- a fixed delimiter
+          # could be matched by a body line and used to inject extra keys into $GITHUB_OUTPUT (same risk
+          # class already fixed in address-review.yml for the same reason); a per-run random delimiter
+          # closes it off.
+          delim="prompt_$(openssl rand -hex 20)"
           {
-            echo "prompt<<PROMPT_EOF"
-            echo "$body"
-            echo "PROMPT_EOF"
+            echo "prompt<<$delim"
+            printf '%s\n' "$body"
+            echo "$delim"
           } >> "$GITHUB_OUTPUT"
 
       - name: Mint senior-engineer App token
