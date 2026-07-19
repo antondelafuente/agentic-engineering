@@ -113,43 +113,52 @@ jobs:
           REVIEW_ALLOW='["codex-engineer[bot]"]'
           COMMENT_ALLOW='["antondelafuente","claude-code-engineer[bot]"]'
 
-          reviews_json=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s 'add // []')
-          comments_json=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s 'add // []')
+          # agentic-engineering#66: a long-lived PR's full review/comment JSON is thread-scale and can
+          # exceed ARG_MAX (observed on agentic-engineering#65's 12-round thread: "jq: Argument list too long", exit 126)
+          # when handed to jq via --arg/--argjson. Every jq call below reads thread-scale data from a file
+          # (either as jq's own positional file-arg or via --slurpfile) instead of a shell variable on the
+          # command line; only the small fixed allowlists still go through --argjson.
+          workdir=$(mktemp -d)
+          trap 'rm -rf "$workdir"' EXIT
+
+          gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s 'add // []' > "$workdir/reviews.json"
+          gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s 'add // []' > "$workdir/comments.json"
 
           # jq can't source canonical-login.sh's bash function, so the same "app/<slug>" -> "<slug>[bot]"
           # remap is duplicated here as a jq def (mirrors review-on-pr.yml's own canon_login jq def).
-          kept_reviews=$(jq --argjson allow "$REVIEW_ALLOW" '
+          jq --argjson allow "$REVIEW_ALLOW" '
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
             map(select((.body // "") != "" and ((.user.login | canon_login) as $c | ($allow | index($c)) != null)))
-          ' <<<"$reviews_json")
-          kept_comments=$(jq --argjson allow "$COMMENT_ALLOW" '
+          ' "$workdir/reviews.json" > "$workdir/kept_reviews.json"
+          jq --argjson allow "$COMMENT_ALLOW" '
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
             map(select((.user.login | canon_login) as $c | ($allow | index($c)) != null))
-          ' <<<"$comments_json")
-          dropped=$(jq -n --argjson rallow "$REVIEW_ALLOW" --argjson callow "$COMMENT_ALLOW" --argjson r "$reviews_json" --argjson c "$comments_json" '
+          ' "$workdir/comments.json" > "$workdir/kept_comments.json"
+          dropped=$(jq -n --argjson rallow "$REVIEW_ALLOW" --argjson callow "$COMMENT_ALLOW" \
+              --slurpfile r "$workdir/reviews.json" --slurpfile c "$workdir/comments.json" '
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-            [($r[] | select((.user.login|canon_login) as $x | ($rallow|index($x))==null) | {id, kind:"review", author:.user.login}),
-             ($c[] | select((.user.login|canon_login) as $x | ($callow|index($x))==null) | {id, kind:"comment", author:.user.login})]
+            [($r[0][] | select((.user.login|canon_login) as $x | ($rallow|index($x))==null) | {id, kind:"review", author:.user.login}),
+             ($c[0][] | select((.user.login|canon_login) as $x | ($callow|index($x))==null) | {id, kind:"comment", author:.user.login})]
           ')
 
-          reviews_total=$(jq 'length' <<<"$reviews_json")
-          comments_total=$(jq 'length' <<<"$comments_json")
-          kept_reviews_count=$(jq 'length' <<<"$kept_reviews")
-          kept_comments_count=$(jq 'length' <<<"$kept_comments")
+          reviews_total=$(jq 'length' "$workdir/reviews.json")
+          comments_total=$(jq 'length' "$workdir/comments.json")
+          kept_reviews_count=$(jq 'length' "$workdir/kept_reviews.json")
+          kept_comments_count=$(jq 'length' "$workdir/kept_comments.json")
           dropped_count=$(jq 'length' <<<"$dropped")
 
           echo "::notice::PR #$PR_NUMBER thread snapshot: $kept_reviews_count/$reviews_total review(s) and $kept_comments_count/$comments_total comment(s) kept (allowlisted authors); $dropped_count dropped: $(jq -c . <<<"$dropped")"
 
-          combined=$(jq -n --argjson r "$kept_reviews" --argjson c "$kept_comments" '
-            ($r | map({ts: .submitted_at, kind: "review", user: .user.login, state, body})) +
-            ($c | map({ts: .created_at, kind: "comment", user: .user.login, state: null, body}))
+          jq -n --slurpfile r "$workdir/kept_reviews.json" --slurpfile c "$workdir/kept_comments.json" '
+            ($r[0] | map({ts: .submitted_at, kind: "review", user: .user.login, state, body})) +
+            ($c[0] | map({ts: .created_at, kind: "comment", user: .user.login, state: null, body}))
             | sort_by(.ts)
-          ')
+          ' > "$workdir/combined.json"
           rendered=$(jq -r '
             .[] | (if .kind == "review" then "### Review (" + .state + ") by " + .user + " at " + .ts
                    else "### Comment by " + .user + " at " + .ts end)
               + "\n" + (.body // "") + "\n"
-          ' <<<"$combined")
+          ' "$workdir/combined.json")
 
           kept_total=$((kept_reviews_count + kept_comments_count))
           if [ "$kept_total" -gt 0 ]; then
@@ -160,16 +169,15 @@ jobs:
             thread="No reviews or comments from allowlisted authors were found ($reviews_total review(s), $comments_total comment(s) total; any non-allowlisted entries were omitted and logged in the workflow run)."
           fi
 
-          # $thread embeds review/comment bodies verbatim, so a fixed delimiter could be matched by a body
-          # line and used to inject extra keys into $GITHUB_OUTPUT (same risk class already fixed for
-          # $COMMENT_BODY below and for review-on-pr.yml's HISTORY_RENDERED) — a per-run random delimiter
-          # closes it off.
-          delim="thread_$(openssl rand -hex 20)"
-          {
-            echo "thread<<$delim"
-            printf '%s\n' "$thread"
-            echo "$delim"
-          } >> "$GITHUB_OUTPUT"
+          # agentic-engineering#66: $thread is thread-scale and MUST NOT cross a step boundary via
+          # $GITHUB_OUTPUT -> a downstream step's `env:` block -- GitHub Actions' `env:` sets a real OS
+          # environment variable for that step's whole process, and env size counts against the same
+          # ARG_MAX pool as argv (verified: once a multi-MB var is exported, even unrelated exec's in that
+          # step, like `cat`, start failing with "Argument list too long"). Write it to a file under the
+          # job-shared $RUNNER_TEMP instead and hand downstream steps only the (tiny) path.
+          thread_file="$RUNNER_TEMP/address_review_thread.txt"
+          printf '%s' "$thread" > "$thread_file"
+          echo "thread_file=$thread_file" >> "$GITHUB_OUTPUT"
 
       - name: Render address-review prompt
         id: render_prompt
@@ -180,7 +188,7 @@ jobs:
           BASE_REF: ${{ steps.resolve_pr.outputs.base_ref }}
           COMMENT_URL: ${{ github.event.comment.html_url }}
           COMMENT_BODY: ${{ github.event.comment.body }}
-          PR_THREAD: ${{ steps.pr_thread.outputs.thread }}
+          PR_THREAD_FILE: ${{ steps.pr_thread.outputs.thread_file }}
         run: |
           set -euo pipefail
           body="$(cat .github/prompts/address-review.md)"
@@ -190,20 +198,19 @@ jobs:
           body="${body//\{\{BASE_REF\}\}/$BASE_REF}"
           body="${body//\{\{COMMENT_URL\}\}/$COMMENT_URL}"
           body="${body//\{\{COMMENT_BODY\}\}/$COMMENT_BODY}"
-          body="${body//\{\{PR_THREAD\}\}/$PR_THREAD}"
+          # agentic-engineering#66: PR_THREAD is thread-scale, so it's read from the file the "Fetch +
+          # filter PR thread" step wrote it to (never through an `env:` value -- see that step's comment
+          # on why env-passing a thread-scale string is unsafe) into a plain, unexported shell variable.
+          pr_thread="$(cat "$PR_THREAD_FILE")"
+          body="${body//\{\{PR_THREAD\}\}/$pr_thread}"
 
-          # code-review finding (PR #44 round 2, MED): $body embeds COMMENT_BODY verbatim -- the
-          # triggering comment's own raw text, from an ALLOWLISTED author but not otherwise trusted
-          # content. A fixed delimiter ("PROMPT_EOF") could be matched by a line inside that comment
-          # body and used to terminate the heredoc early, injecting extra keys into $GITHUB_OUTPUT.
-          # Same fix already applied in review-on-pr.yml (antondelafuente/automated-researcher#389) for the same class
-          # of embedded-untrusted-body risk: a per-run random delimiter closes it off.
-          delim="prompt_$(openssl rand -hex 20)"
-          {
-            echo "prompt<<$delim"
-            printf '%s\n' "$body"
-            echo "$delim"
-          } >> "$GITHUB_OUTPUT"
+          # $body is now itself prompt-scale (it embeds the full PR thread), so it's written straight to
+          # a file under the job-shared $RUNNER_TEMP and only that (tiny) path is handed to the next step
+          # -- same reasoning as $thread_file above, not the $GITHUB_OUTPUT delimiter trick this step used
+          # previously.
+          prompt_file="$RUNNER_TEMP/address_review_prompt.txt"
+          printf '%s' "$body" > "$prompt_file"
+          echo "prompt_file=$prompt_file" >> "$GITHUB_OUTPUT"
 
       - name: Mint claude engineer App token
         id: mint_claude_token
@@ -249,12 +256,15 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ steps.mint_claude_token.outputs.token }}
-          PROMPT: ${{ steps.render_prompt.outputs.prompt }}
+          PROMPT_FILE: ${{ steps.render_prompt.outputs.prompt_file }}
           CLAUDE_BIN: ${{ steps.install_claude.outputs.path }}
         timeout-minutes: 45
         run: |
           set -euo pipefail
-          jq -nc --arg content "$PROMPT" '{"type":"user","message":{"role":"user","content":$content}}' \
+          # agentic-engineering#66: the rendered prompt embeds the full PR thread, so it's thread-scale --
+          # it's read straight from the file the "Render address-review prompt" step wrote it to (never
+          # through an `env:` value; see that step's comment) and handed to jq via --rawfile, never --arg.
+          jq -nc --rawfile content "$PROMPT_FILE" '{"type":"user","message":{"role":"user","content":$content}}' \
             | "$CLAUDE_BIN" -p --input-format stream-json --output-format stream-json --verbose \
                 --model claude-sonnet-5 \
                 --allowedTools Bash,Edit,Write,Read,Grep,Glob \
