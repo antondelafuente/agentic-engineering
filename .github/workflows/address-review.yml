@@ -35,12 +35,13 @@ jobs:
     # allowlist (researcher + the codex bot + the senior-engineer bot, all login representations) is
     # hard-coded here for the same reason as implement-on-ready.yml's own allowlist: a compromised in-repo
     # file must not be able to widen who can trigger a privileged run. The claude engineer bot itself is
-    # deliberately EXCLUDED (automated-researcher#400): the implementor never needs to dispatch itself, and
-    # its own completion comments can contain the literal mention string, which would otherwise
-    # self-retrigger a round. senior-engineer-agent[bot] was added (agentic-engineering#63, mirroring
-    # automated-researcher#438): it is the in-flight PR adjudicator, and its guidance comments are exactly
-    # how it hands the implementor precise instructions through this same mention path -- posting as the
-    # codex App would be wrong-family, and posting as claude-code-engineer is excluded by the rule above.
+    # deliberately EXCLUDED (antondelafuente/automated-researcher#400): the implementor never needs to
+    # dispatch itself, and its own completion comments can contain the literal mention string, which would
+    # otherwise self-retrigger a round. senior-engineer-agent[bot] was added (agentic-engineering#63,
+    # mirroring antondelafuente/automated-researcher#438): it is the in-flight PR adjudicator, and its
+    # guidance comments are exactly how it hands the implementor precise instructions through this same
+    # mention path -- posting as the codex App would be wrong-family, and posting as claude-code-engineer
+    # is excluded by the rule above.
     if: |
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '@claude-code-engineer') &&

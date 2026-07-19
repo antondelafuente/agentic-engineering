@@ -1,8 +1,8 @@
 # Triage rubric
 
 Read from this repo's base ref by `triage-assess.yml`. Ported from automated-researcher's own triage rubric
-(researcher-locked there on 2026-07-12, automated-researcher#437's original "Triager, v1" design synthesized
-on automated-researcher#414, evolved by automated-researcher#497) via agentic-engineering#63, adapted to this repo's own
+(researcher-locked there on 2026-07-12, antondelafuente/automated-researcher#437's original "Triager, v1" design synthesized
+on antondelafuente/automated-researcher#414, evolved by antondelafuente/automated-researcher#497) via agentic-engineering#63, adapted to this repo's own
 scope (the engineering team's tooling, not a research product). Applied identically by both blind assessors
 (Fable, Sol) and by the sighted adjudication pass. Treat this file the same way as an `unlabeled -> ready`
 disposition flip (AGENTS.md): edit only on the back of an actual researcher conversation, not casually.
@@ -37,7 +37,7 @@ workaround is mechanical even when spend-adjacent; escalate only if the fix itse
 before defaulting a cost-adjacent ticket to ASK — the split was systematic (one model over-escalating
 spend-adjacent tickets as policy), not noise.
 
-## Wave batching (file-disjoint rule, from automated-researcher#431's root cause)
+## Wave batching (file-disjoint rule, from antondelafuente/automated-researcher#431's root cause)
 
 For DO verdicts, the sighted adjudication additionally proposes a wave grouping: diff the candidate tickets'
 expected file footprints (the ticket usually names the skill/script/workflow it touches) and serialize any

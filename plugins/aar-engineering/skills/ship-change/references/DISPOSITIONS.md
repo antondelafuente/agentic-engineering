@@ -25,7 +25,7 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`parked`** — real but deliberately not-now; revisit later. (Distinct from `wontfix` = never.)
 - **`other`** — doesn't fit the others; a recurring `other` is the signal to evolve the vocabulary.
 
-**Triager (event-driven per-ticket assessment; ported from automated-researcher#437/#497 via
+**Triager (event-driven per-ticket assessment; ported from antondelafuente/automated-researcher#437/antondelafuente/automated-researcher#497 via
 agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reopened Issue **from an
 allowlisted sender** (the researcher or one of the two engineer bots) within minutes — two independent
 blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses) against

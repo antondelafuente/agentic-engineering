@@ -1,14 +1,14 @@
 name: triage-assess
 
-# GitHub-native SWE pipeline, triager leg (ported from automated-researcher#497 via agentic-engineering#63;
-# automated-researcher's own v1 batch design originated in its automated-researcher#437/automated-researcher#414). Assess-and-propose only — zero
+# GitHub-native SWE pipeline, triager leg (ported from antondelafuente/automated-researcher#497 via agentic-engineering#63;
+# automated-researcher's own v1 batch design originated in its antondelafuente/automated-researcher#437/antondelafuente/automated-researcher#414). Assess-and-propose only — zero
 # label/body writes:
 #   - Event-driven (`issues: [opened, reopened]`): assesses the ONE triggering ticket, regardless of its
 #     current labels, within minutes of filing/reopening.
 #   - A scheduled weekly BACKSTOP SWEEP catches event-missed stragglers — open issues that are
 #     unlabeled-and-unescalated per AGENTS.md's disposition lifecycle (carry NO disposition label at all:
 #     `ready`, `needs-shaping`, `blocked`, `parked`, `other`; and no escalation label: `needs-human`,
-#     `needs-senior-engineer`, `needs-dispatcher`), and carry NO assessment comment yet. Per automated-researcher#501's review round, the
+#     `needs-senior-engineer`, `needs-dispatcher`), and carry NO assessment comment yet. Per antondelafuente/automated-researcher#501's review round, the
 #     sweep does NOT assess these stragglers itself: it only dispatches, for each one, the SAME per-issue path
 #     a single `issues` event would take (`workflow_dispatch` with `issue_number` set), using the minted
 #     claude-engineer App token so the dispatched run's own actor is `claude-code-engineer[bot]` — an
@@ -42,7 +42,7 @@ name: triage-assess
 # Every place this workflow FINDS an assessment marker comment — sweep skip-detection, rollup verdict
 # extraction, and both idempotent-upsert lookups (the per-ticket comment and the tracking-issue rollup
 # comment) — filters by comment AUTHOR (canonicalized to `claude-code-engineer[bot]`, handling both login
-# representations the GitHub API uses — automated-researcher#381's dual-representation precedent), never by
+# representations the GitHub API uses — antondelafuente/automated-researcher#381's dual-representation precedent), never by
 # body-prefix match alone. This repo is public: without the author filter, an outside commenter could post a
 # marker-shaped comment that fools the sweep into skipping real assessment, feeds a forged verdict into the
 # researcher-facing rollup, or gets its own comment silently overwritten by a later PATCH meant for our own
@@ -271,7 +271,7 @@ jobs:
             echo "PROMPT_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # Same pin rationale as implement-on-ready.yml/checks.yml (automated-researcher#384/#387): the
+      # Same pin rationale as implement-on-ready.yml/checks.yml (antondelafuente/automated-researcher#384/antondelafuente/automated-researcher#387): the
       # claude-code-action wrapper's auto-install has a known startup-crash class, so the raw CLI is
       # installed and invoked directly at this exact verified-good version.
       - name: Install pinned Claude Code
@@ -355,11 +355,11 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ":read-only"
-          # Same pins as review-on-pr.yml's reviewer (automated-researcher#394): a deliberate choice, bump
+          # Same pins as review-on-pr.yml's reviewer (antondelafuente/automated-researcher#394): a deliberate choice, bump
           # only as review-on-pr.yml's own conscious change, never as a side effect of touching this file.
           model: gpt-5.6-sol
           effort: medium
-          # automated-researcher#497 root cause: `allow-bot-users` only bypasses the collaborator-permission
+          # antondelafuente/automated-researcher#497 root cause: `allow-bot-users` only bypasses the collaborator-permission
           # check when codex-action's own isBotActor() sees an actor ending in `[bot]` — true for
           # `issues`/human `workflow_dispatch` runs, but NOT for `schedule` runs, where `github.actor` is the
           # bare login of whoever last modified this workflow file. `allow-users` matches the actor string

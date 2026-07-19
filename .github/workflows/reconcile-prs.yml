@@ -1,6 +1,6 @@
 name: reconcile-prs
 
-# GitHub-native SWE pipeline, reconciler leg (ported from automated-researcher#431 via agentic-engineering#63).
+# GitHub-native SWE pipeline, reconciler leg (ported from antondelafuente/automated-researcher#431 via agentic-engineering#63).
 # GitHub creates NO `pull_request` workflow run when a PR is unmergeable at event time (the run targets
 # refs/pull/N/merge, which can't be built while the PR conflicts with base) -- deterministic platform
 # behavior, not dropped events. In wave operation this is the dominant silence mode: a sibling merge lands
@@ -17,7 +17,7 @@ name: reconcile-prs
 #     its `workflow_dispatch` actuator (the residual true-event-loss case, if one exists).
 # See AGENTS.md "GitHub-native SWE pipeline (BYOK)" for the full trust model this implements.
 #
-# automated-researcher#513: GitHub emits no event when a PR becomes conflicted, but the event that CAUSES
+# antondelafuente/automated-researcher#513: GitHub emits no event when a PR becomes conflicted, but the event that CAUSES
 # a conflict IS observable -- every merge is a push to main. The `push` trigger below is the primary,
 # low-latency detector (a sibling merge lands, this fires within ~a minute); the cron stays as the backstop
 # for lost events and crashed runs. Because `mergeable` is computed lazily, a push-triggered run can see
@@ -87,7 +87,7 @@ jobs:
           REVIEW_GRACE_SECONDS=$((30 * 60))
           now_epoch=$(date -u +%s)
 
-          # Lazy-mergeability retry (automated-researcher#513): right after a push, GitHub's mergeability
+          # Lazy-mergeability retry (antondelafuente/automated-researcher#513): right after a push, GitHub's mergeability
           # computation is still running in the background and the API reports UNKNOWN until it finishes.
           # A few short retries give a push-triggered run a real chance to see the settled CONFLICTING/
           # MERGEABLE value itself, instead of routinely deferring to the next cron tick and losing most

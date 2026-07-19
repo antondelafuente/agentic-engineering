@@ -134,7 +134,7 @@ itself, ships by labeling an Issue `ready`.
   `needs-dispatcher` is distinct from `needs-senior-engineer` below: it is the implementor's own
   self-escalation when it is stuck or sees a contradiction, never applied by the round-limit/conflict-
   stagnation machinery, which summons the senior engineer instead.
-- **Senior-engineer leg (in-flight PR adjudication; ported from automated-researcher#438 via
+- **Senior-engineer leg (in-flight PR adjudication; ported from antondelafuente/automated-researcher#438 via
   agentic-engineering#63):** `senior-engineer.yml` is summoned by the `needs-senior-engineer` label landing
   on a PR — by the reconciler's round-budget trip, by `review-on-pr.yml`'s own round-limit trip
   (agentic-engineering#53's counting, reused — see submit-verdict below), by an implementor asking for
@@ -165,7 +165,7 @@ itself, ships by labeling an Issue `ready`.
   implement-on-ready's dispatch path (re-verified fresh via `gh pr view`: same-repo, bot-authored, open).
   Useless against a still-conflicted PR (no merge ref to review); used by the reconciler below for the
   mergeable-but-unreviewed case, and as a hand tool.
-- **Reconciler (scheduled, level-triggered; ported from automated-researcher#431/#513 via
+- **Reconciler (scheduled, level-triggered; ported from antondelafuente/automated-researcher#431/antondelafuente/automated-researcher#513 via
   agentic-engineering#63):** GitHub fires no `pull_request` run at all while a PR is unmergeable at event
   time — the run targets `refs/pull/N/merge`, which can't be built while the PR conflicts with base. This is
   deterministic platform behavior, not dropped events: a sibling merge lands on main, a still-open same-area
@@ -261,7 +261,7 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`parked`** — real but deliberately not-now; revisit later. (Distinct from `wontfix` = never.)
 - **`other`** — doesn't fit the others; a recurring `other` is the signal to evolve the vocabulary.
 
-**Triager (event-driven per-ticket assessment; ported from automated-researcher#437/#497 via
+**Triager (event-driven per-ticket assessment; ported from antondelafuente/automated-researcher#437/antondelafuente/automated-researcher#497 via
 agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reopened Issue **from an
 allowlisted sender** (the researcher or one of the two engineer bots) within minutes — two independent
 blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses) against

@@ -57,9 +57,19 @@ paraphrase.
      regressions. This comment re-dispatches the implementor through the existing mention path.
    - **Escalate what you can't verify yourself.** Anything that needs instance state you don't have access to
      (pods, fleet, box), or genuine researcher/product taste rather than a verifiable fact, is NOT yours to
-     guess at — escalating is correct behavior here, not a fallback. Post a structured PR comment with
-     exactly these four parts: the decision that's needed, the options, your own lean (with your reasoning),
-     and what happens by default if nobody answers. Then apply the `needs-human` label.
+     guess at — escalating is correct behavior here, not a fallback. Post a PR comment with exactly these
+     four parts, each on its own line starting with the literal bold label shown (the workflow verifies your
+     escalation by checking for these four labels — an escalation comment missing any of them fails
+     verification and does not clear `needs-senior-engineer`):
+
+     ```
+     **Decision needed:** <the decision a human must make>
+     **Options:** <the concrete options>
+     **Lean:** <your own lean, with your reasoning>
+     **Default if unanswered:** <what happens if nobody answers>
+     ```
+
+     Then apply the `needs-human` label.
 5. **A dispute you write must cite only escape hatches or safeguards that actually exist.** Before citing any
    existing safeguard, script flag, or behavior as grounds for a dispute, verify it's real by reading the
    code or running it — an invented safeguard undermines a dispute worse than not disputing at all.

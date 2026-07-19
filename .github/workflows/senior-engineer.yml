@@ -1,7 +1,7 @@
 name: senior-engineer
 
-# GitHub-native SWE pipeline, senior-engineer leg (ported from automated-researcher#438 via
-# agentic-engineering#63; automated-researcher's parent design automated-researcher#414's "Shepherd"). In-flight PR judgment --
+# GitHub-native SWE pipeline, senior-engineer leg (ported from antondelafuente/automated-researcher#438 via
+# agentic-engineering#63; automated-researcher's parent design antondelafuente/automated-researcher#414's "Shepherd"). In-flight PR judgment --
 # verifying reviewer findings, adjudicating disputes, handing the implementor exact guidance -- previously
 # depended on a human-attended session, landing on `needs-dispatcher` whenever the reconciler's round budget
 # tripped or an agent needed adjudication. This workflow makes that judgment layer product-owned and
@@ -197,7 +197,17 @@ jobs:
           LOOP_COUNT: ${{ needs.resolve.outputs.loop_count }}
         run: |
           set -euo pipefail
-          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Senior engineer: \`needs-senior-engineer\` has been applied to this PR $LOOP_COUNT times (the 2-reappearance loop guard) without the underlying issue resolving. Escalating to \`needs-human\` instead of running another adjudication round — repeated re-labeling without progress means the automated guidance loop isn't converging and needs a person's judgment on what's actually stuck."
+          # Same four-part structured-escalation contract as the adjudicate job's agent-authored comment
+          # (AGENTS.md's senior-engineer leg description) -- a human landing on a needs-human PR must get the
+          # same decision/options/lean/default shape regardless of which path escalated it
+          # (agentic-engineering#65 round 3, P1).
+          body=$(printf '%s\n\n**Decision needed:** %s\n\n**Options:** %s\n\n**Lean:** %s\n\n**Default if unanswered:** %s\n' \
+            "Senior engineer: \`needs-senior-engineer\` has been applied to this PR $LOOP_COUNT times (the 2-reappearance loop guard) without the underlying issue resolving. Escalating to \`needs-human\` instead of running another adjudication round — repeated re-labeling without progress means the automated guidance loop isn't converging and needs a person's judgment on what's actually stuck." \
+            "whether to keep pushing this PR through automated adjudication rounds, or to have a person take over — resolve the disagreement directly, descope the blocking slice into a follow-up issue, or make another product-taste call the automation can't verify on its own." \
+            "(a) a person reviews the PR's history and posts the guidance/decision that lets the loop converge; (b) a person identifies the blocking diff slice and files it as a follow-up issue, then lands the remainder; (c) a person closes or otherwise redirects the PR if it's no longer the right shape." \
+            "without a person's judgment on what specifically is stuck, this workflow cannot pick between (a)/(b)/(c) itself — that is exactly why the loop guard hands off here instead of running a third-plus adjudication round." \
+            "the PR stays labeled \`needs-human\` and no further automated senior-engineer or addressing rounds run against it until a person acts.")
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$body"
           # No `|| true` here: a claimed-but-undelivered escalation is exactly the swallowed-escalation
           # class this pipeline exists to eliminate -- the escalation only exists once needs-human is
           # actually on the PR, so a failed mutation must fail this job, not pass silently.
@@ -344,7 +354,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      # Same pin as every other CLI-running leg of this pipeline (automated-researcher#387/#388): the
+      # Same pin as every other CLI-running leg of this pipeline (antondelafuente/automated-researcher#387/antondelafuente/automated-researcher#388): the
       # wrapper action's own bun/agent-SDK harness crashes at startup; the raw pinned CLI runs cleanly.
       - name: Install pinned Claude Code
         id: install_claude
@@ -440,11 +450,19 @@ jobs:
                 echo "::error::status=escalated was self-reported for PR #$PR_NUMBER, but needs-human is either not present or was not applied during this run (started $STARTED_AT) -- a pre-existing label is not a delivered escalation; treating the self-report as unverified/failed"
                 exit 1
               fi
+              # AGENTS.md's structured-escalation contract is FOUR parts (decision, options, lean, default) --
+              # the prompt requires each as its own literal bold label (agentic-engineering#65 round 3, P0),
+              # so any comment merely existing is not enough: it must carry all four labels to count as the
+              # structured escalation the label mutation below is gated on.
               has_comment=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg started "$STARTED_AT" '
-                add // [] | any(.[]; .user.login == "senior-engineer-agent[bot]" and .created_at > $started)
+                add // [] | any(.[]; .user.login == "senior-engineer-agent[bot]" and .created_at > $started
+                  and (.body | contains("**Decision needed:**"))
+                  and (.body | contains("**Options:**"))
+                  and (.body | contains("**Lean:**"))
+                  and (.body | contains("**Default if unanswered:**")))
               ')
               if [ "$has_comment" != "true" ]; then
-                echo "::error::status=escalated was self-reported for PR #$PR_NUMBER, but no senior-engineer-agent[bot] comment created after $STARTED_AT was found -- the label alone is not the structured escalation AGENTS.md promises; treating the self-report as unverified/failed"
+                echo "::error::status=escalated was self-reported for PR #$PR_NUMBER, but no senior-engineer-agent[bot] comment created after $STARTED_AT carrying all four required labels (Decision needed / Options / Lean / Default if unanswered) was found -- a comment lacking the full structure is not the escalation AGENTS.md promises; treating the self-report as unverified/failed"
                 exit 1
               fi
               ;;

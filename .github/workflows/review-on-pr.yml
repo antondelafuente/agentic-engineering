@@ -6,7 +6,7 @@ name: review-on-pr
 # keep the existing manual review path. See AGENTS.md "GitHub-native SWE pipeline (BYOK)" for the trust
 # model and the P0/P1 review-guidance convention this reads from the PR's base ref.
 #
-# automated-researcher#431 / agentic-engineering#63: `pull_request` events (opened/synchronize) fire NO run
+# antondelafuente/automated-researcher#431 / agentic-engineering#63: `pull_request` events (opened/synchronize) fire NO run
 # at all while a PR is unmergeable (GitHub can't build the refs/pull/N/merge ref to run against) —
 # deterministic platform behavior, not event loss, but it means a PR that becomes mergeable again with no
 # NEW push (e.g. a conflict resolved via a merge from main) needs an explicit re-fire since no fresh
@@ -43,7 +43,7 @@ jobs:
     # automated-researcher#381: this is a job-level `if:` (evaluated before any step/shell runs), so it
     # can't share the canonical_login() shell helper; both known representations of the App identity are
     # checked explicitly instead (event-payload "<slug>[bot]" and CLI/GraphQL "app/<slug>").
-    # automated-researcher#431 / agentic-engineering#63: the workflow_dispatch branch is only a COARSE
+    # antondelafuente/automated-researcher#431 / agentic-engineering#63: the workflow_dispatch branch is only a COARSE
     # pre-filter on the triggering actor (mirrors implement-on-ready.yml) — the "Resolve PR context" step
     # below re-verifies the target PR is same-repo, bot-authored, and open, fresh, before anything else
     # runs. A job-level `if:` has no PR-fork/author fields to check against an arbitrary dispatch-supplied
@@ -201,9 +201,9 @@ jobs:
         # of rendering another round.
         #
         # agentic-engineering#63: `senior-engineer-agent[bot]` (the in-flight-adjudication shepherd,
-        # AGENTS.md's "Senior-engineer leg", ported from automated-researcher#438) is added to
+        # AGENTS.md's "Senior-engineer leg", ported from antondelafuente/automated-researcher#438) is added to
         # COMMENT_ALLOW below. Its rulings are the convergence mechanism's memory — automated-researcher's
-        # own history (automated-researcher PR #505) showed a reviewer that never sees the shepherd's ruling re-flags the
+        # own history (antondelafuente/automated-researcher PR #505) showed a reviewer that never sees the shepherd's ruling re-flags the
         # same finding class the shepherd already settled, and the ladder escalates on a disagreement that
         # only exists because the judge was deaf to the adjudicator. Its escalation notices ("needs-human
         # applied..." / round-limit reached) are legitimate history too — they tell the reviewer the loop
@@ -401,7 +401,7 @@ jobs:
           model: gpt-5.6-sol
           effort: medium
           # The triggering actor is whoever opened/pushed the PR (pull_request) or whoever/whatever
-          # dispatched this actuator (workflow_dispatch — automated-researcher#431), and openai/codex-action
+          # dispatched this actuator (workflow_dispatch — antondelafuente/automated-researcher#431), and openai/codex-action
           # denies bot actors by default (docs/security.md) even though this job's own `if:` already
           # restricts the run to an allowlisted identity. Passing the actual triggering actor here covers
           # both paths (a human actor is simply inert against this bot-only denylist).
@@ -483,7 +483,7 @@ jobs:
             end)
           ' codex-review.json)
 
-          # automated-researcher#502: this body embeds model-authored text (finding summaries/evidence)
+          # antondelafuente/automated-researcher#502: this body embeds model-authored text (finding summaries/evidence)
           # verbatim, and a later step in this same job may post a deterministic @claude-code-engineer
           # dispatch mention to auto-trigger address-review.yml. Any occurrence of that same literal
           # substring inside the model's own prose must never itself be a live mention -- wrapping it in an
@@ -501,7 +501,7 @@ jobs:
           # completed codex review" check, permanently suppressing the very re-review that would otherwise
           # fire for it. So: skip submitting any review at all and stop -- the current head is correctly
           # left with zero codex reviews against it, which is exactly the state reconcile-prs.yml
-          # (agentic-engineering#63 / automated-researcher#431) polls for and repairs by re-firing
+          # (agentic-engineering#63 / antondelafuente/automated-researcher#431) polls for and repairs by re-firing
           # review-on-pr.yml's workflow_dispatch actuator.
           current_head_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')
           if [ "$current_head_sha" != "$CAPTURED_HEAD_SHA" ]; then
@@ -532,7 +532,7 @@ jobs:
 
           echo "event=$event" >> "$GITHUB_OUTPUT"
 
-      # agentic-engineering#63 (mirroring automated-researcher#502): closes the pipeline's last
+      # agentic-engineering#63 (mirroring antondelafuente/automated-researcher#502): closes the pipeline's last
       # human-in-the-loop step on the healthy path -- an interactive session previously had to hand-post the
       # allowlisted @claude-code-engineer mention after every CHANGES_REQUESTED round (address-review.yml's
       # own allowlist already includes codex-engineer[bot], which is the identity this job posts as). Reuses
@@ -553,7 +553,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Hard gate (mirroring automated-researcher#502 point 3): an escalation label already parked this
+          # Hard gate (mirroring antondelafuente/automated-researcher#502 point 3): an escalation label already parked this
           # PR with the senior-engineer leg or a human -- the automated loop must never post another
           # dispatch mention or duplicate escalation on top of that, regardless of round count.
           labels=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
@@ -562,7 +562,7 @@ jobs:
             *,needs-human,*) echo "PR #$PR_NUMBER: needs-human already set; skipping auto-dispatch/escalation"; exit 0 ;;
           esac
 
-          # automated-researcher#505 review round 2/3: the freshness check in the submission step above only
+          # antondelafuente/automated-researcher#505 review round 2/3: the freshness check in the submission step above only
           # guards up to the moment of that POST -- a push landing in the gap between that POST succeeding
           # and this step starting (however small) would otherwise still dispatch/escalate against a head
           # the review's findings no longer describe. Re-verify immediately before doing anything mutating,
@@ -590,14 +590,23 @@ jobs:
             # a privileged round. Break the substring so it can never match that predicate.
             report=${report//"@claude-code-engineer"/"[@]claude-code-engineer"}
 
-            # Label mutation before the comment (not after): needs-senior-engineer landing is what actually
-            # summons senior-engineer.yml, so it must exist even if the comment POST below then fails --
-            # the adjudicator can reconstruct the report itself from the review + PR history either way.
-            gh api "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=needs-senior-engineer"
-
+            # Comment posted BEFORE the label mutation (agentic-engineering#65 round 3, P1: this was
+            # previously label-then-comment, which meant `labeled` firing senior-engineer.yml could race
+            # ahead of this report existing -- its own PR-thread snapshot step could run, and complete,
+            # before the consolidated report it's summoned to adjudicate was even posted). Posting the
+            # report first guarantees the report is always live on the PR before anything the label
+            # triggers can observe PR state.
             report_body=$(printf '## Round limit reached — needs-senior-engineer\n\nThis PR has reached %s consecutive CHANGES_REQUESTED reviews from codex-engineer (limit: %s). Escalating for in-flight adjudication rather than continuing to auto-dispatch. Consolidated report:\n\n%s\n' \
               "$round" "$ROUND_LIMIT" "$report")
             gh api "repos/$REPO/issues/$PR_NUMBER/comments" -f "body=$report_body"
+
+            # No `|| true`: a report posted but never actually escalated (label mutation failed) is exactly
+            # the swallowed-escalation class this pipeline exists to eliminate, so a failed mutation must
+            # fail this job loudly rather than pass silently with the PR left un-escalated.
+            if ! gh api "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=needs-senior-engineer"; then
+              echo "::error::posted the round-limit consolidated report on PR #$PR_NUMBER but failed to apply needs-senior-engineer -- the escalation is not delivered until the label lands"
+              exit 1
+            fi
           else
             echo "PR #$PR_NUMBER: dispatching addressing round $round/$ROUND_LIMIT"
             gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review loop: auto-dispatch round $round/$ROUND_LIMIT. @claude-code-engineer the Codex review above requested changes -- please address the findings and push."
