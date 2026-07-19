@@ -259,7 +259,7 @@ jobs:
             fi
 
             local comment_ts
-            if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s '
+            if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s -r '
               def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
               add // [] | map(select((.user.login | canon_login) == "senior-engineer-agent[bot]"))
                 | sort_by(.created_at) | last | .created_at // empty
