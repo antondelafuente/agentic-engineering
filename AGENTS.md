@@ -259,12 +259,14 @@ itself, ships by labeling an Issue `ready`.
   `SENIOR_ENGINEER_APP_PRIVATE_KEY`, but by design fails gracefully (a clear skip log line) rather than
   loudly while those two are unset, since it's an optional-until-provisioned addition to an already-working
   pipeline, not a bring-up dependency the way the original six are. Two legs additionally need `Actions:
-  write` granted to a GitHub App: the triager's sweep leg needs it on `CLAUDE_APP` (alongside its existing
-  Issues/Contents scopes) to dispatch a per-issue assessment run for each straggler it finds, and the
-  reconciler needs it on `CODEX_APP` to re-fire `review-on-pr.yml` via `workflow_dispatch` for a mergeable-
-  but-unreviewed head (`reconcile-prs.yml`'s `handle_mergeable`), and — same token, same scope — to summon
+  write` granted to a GitHub App, both on `CLAUDE_APP`: the triager's sweep leg needs it (alongside its
+  existing Issues/Contents scopes) to dispatch a per-issue assessment run for each straggler it finds, and
+  the reconciler needs it to re-fire `review-on-pr.yml` via `workflow_dispatch` for a mergeable-but-unreviewed
+  head (`reconcile-prs.yml`'s `handle_mergeable`), and — same token, same scope — to summon
   `senior-engineer.yml` via `workflow_dispatch` at its own round-limit escalation on a still-CONFLICTING PR
-  (`handle_conflicted`), since that PR's `labeled` event can never fire a `pull_request` run to catch it.
+  (`handle_conflicted`), since that PR's `labeled` event can never fire a `pull_request` run to catch it. The
+  reconciler's other `gh` calls (comments, labels) keep running under `CODEX_APP`, which does not need
+  `Actions: write`.
 - **Required-check status (as-built):** branch protection on `main` requires the `checks` status (the
   `checks.yml` Action) as a required GitHub-reported status, with `review-on-pr`'s native cross-family
   review as the required approving review — added via the owner-token maintenance path

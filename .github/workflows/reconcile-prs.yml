@@ -82,8 +82,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # A single minted token covers every gh call this job makes, read AND write alike: every mutation
-      # (mention comment, label, workflow_dispatch) needs it anyway, and address-review.yml's comment-author
+      # This codex engineer App token covers every gh call this job makes except the two workflow_dispatch
+      # calls below (see the "Mint claude engineer App token" step further down, added for those): every
+      # other mutation (mention comment, label) needs it anyway, and address-review.yml's comment-author
       # allowlist (["antondelafuente","codex-engineer[bot]","app/codex-engineer","senior-engineer-agent[bot]","app/senior-engineer-agent"])
       # deliberately EXCLUDES the claude engineer bot, so the resolution-dispatch mention specifically must
       # be posted as this identity.
