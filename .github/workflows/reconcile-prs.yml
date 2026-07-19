@@ -101,7 +101,7 @@ jobs:
       # claude engineer App token for just those call sites instead (same pattern triage-assess.yml's
       # sweep-dispatch-rollup job already uses for its own self-dispatch) fixes this AND keeps the dispatched
       # run's actor allowlisted: both `senior-engineer.yml`'s and `review-on-pr.yml`'s workflow_dispatch
-      # authorization checks check `github.actor` against `claude-code-engineer[bot]` among others, which this
+      # authorization checks `github.actor` against `claude-code-engineer[bot]` among others, which this
       # token's identity satisfies directly. A bare `github.token` override would have dispatched successfully but
       # as `github-actions[bot]` -- not on that allowlist -- so the summoned run's authorization would silently
       # skip it; using the claude engineer App instead avoids ever needing to touch those workflows' own
