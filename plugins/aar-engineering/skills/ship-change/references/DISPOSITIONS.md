@@ -26,14 +26,19 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`other`** — doesn't fit the others; a recurring `other` is the signal to evolve the vocabulary.
 
 **Triager (event-driven per-ticket assessment; ported from automated-researcher#437/#497 via
-agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reopened Issue within minutes —
-two independent blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses)
-against `.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
+agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reopened Issue **from an
+allowlisted sender** (the researcher or one of the two engineer bots) within minutes — two independent
+blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses) against
+`.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
 (`DO`/`SKIP`/`ASK`), an optional body-edit, and (for `DO`) a wave number — posted as a single idempotent
-on-ticket assessment comment, never a label or body write. A weekly backstop sweep (`schedule`) catches
-issues an event missed: it dispatches the same per-ticket assessment for every open, unlabeled-and-
-unescalated issue with no assessment comment yet, then rebuilds a rollup digest comment on the tracking
-issue (#64) listing every ticket already assessed and still awaiting a researcher decision. `needs-design`
+on-ticket assessment comment, never a label or body write. This repo is public, so an Issue filed or
+reopened by anyone else does NOT get this event-driven pass (it would otherwise let an outside filer trigger
+paid model calls for free) — it is instead picked up by the weekly backstop sweep below, on that sweep's own
+cadence rather than within minutes. A weekly backstop sweep (`schedule`) catches issues an event missed —
+both genuinely event-missed stragglers and every non-allowlisted-sender filing, which always lands here
+first: it dispatches the same per-ticket assessment for every open, unlabeled-and-unescalated issue with no
+assessment comment yet, then rebuilds a rollup digest comment on the tracking issue (#64) listing every
+ticket already assessed and still awaiting a researcher decision. `needs-design`
 is retired, same as automated-researcher's own convention — there is no separate "awaiting shaping" label
 this triager introduces or resurrects; an Issue with no disposition is either fresh (about to get its
 event-driven assessment) or already carries the triager's assessment comment, in which case the citation

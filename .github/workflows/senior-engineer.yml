@@ -401,9 +401,13 @@ jobs:
       # not proof. Before anything downstream treats this run as having delivered guidance or escalation,
       # confirm the claimed outcome actually exists on GitHub -- for `guided`, a senior-engineer-agent[bot]
       # comment containing the @claude-code-engineer mention, created after this run started; for
-      # `escalated`, the needs-human label actually present. A mismatch is treated as the failure path (this
-      # step exits non-zero, so `success()` below goes false and the `failure()` step fires instead) -- never
-      # clear needs-senior-engineer on an unverified claim.
+      # `escalated`, BOTH the needs-human label AND the structured escalation comment the prompt's step 4
+      # requires (AGENTS.md's senior-engineer leg description), with the label proven to have been APPLIED
+      # during this run (not merely present) and the comment authored by senior-engineer-agent[bot] after
+      # this run started (agentic-engineering#65 round 2, P0-1) -- a pre-existing needs-human label from an
+      # earlier/unrelated escalation, or a comment with no matching label mutation this run, must not pass.
+      # A mismatch is treated as the failure path (this step exits non-zero, so `success()` below goes false
+      # and the `failure()` step fires instead) -- never clear needs-senior-engineer on an unverified claim.
       - name: Verify adjudication outcome
         id: verify_outcome
         env:
@@ -427,10 +431,20 @@ jobs:
               fi
               ;;
             escalated)
+              label_added_now=$(gh api "repos/$REPO/issues/$PR_NUMBER/events" --paginate | jq -s --arg started "$STARTED_AT" '
+                add // [] | any(.[]; .event == "labeled" and .label.name == "needs-human" and .created_at > $started)
+              ')
               has_label=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels \
                 | jq -e 'any(.labels[]; .name == "needs-human")' >/dev/null 2>&1 && echo true || echo false)
-              if [ "$has_label" != "true" ]; then
-                echo "::error::status=escalated was self-reported for PR #$PR_NUMBER, but needs-human is not actually present -- treating the self-report as unverified/failed"
+              if [ "$has_label" != "true" ] || [ "$label_added_now" != "true" ]; then
+                echo "::error::status=escalated was self-reported for PR #$PR_NUMBER, but needs-human is either not present or was not applied during this run (started $STARTED_AT) -- a pre-existing label is not a delivered escalation; treating the self-report as unverified/failed"
+                exit 1
+              fi
+              has_comment=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg started "$STARTED_AT" '
+                add // [] | any(.[]; .user.login == "senior-engineer-agent[bot]" and .created_at > $started)
+              ')
+              if [ "$has_comment" != "true" ]; then
+                echo "::error::status=escalated was self-reported for PR #$PR_NUMBER, but no senior-engineer-agent[bot] comment created after $STARTED_AT was found -- the label alone is not the structured escalation AGENTS.md promises; treating the self-report as unverified/failed"
                 exit 1
               fi
               ;;

@@ -8,7 +8,7 @@ name: triage-assess
 #   - A scheduled weekly BACKSTOP SWEEP catches event-missed stragglers — open issues that are
 #     unlabeled-and-unescalated per AGENTS.md's disposition lifecycle (carry NO disposition label at all:
 #     `ready`, `needs-shaping`, `blocked`, `parked`, `other`; and no escalation label: `needs-human`,
-#     `needs-senior-engineer`), and carry NO assessment comment yet. Per automated-researcher#501's review round, the
+#     `needs-senior-engineer`, `needs-dispatcher`), and carry NO assessment comment yet. Per automated-researcher#501's review round, the
 #     sweep does NOT assess these stragglers itself: it only dispatches, for each one, the SAME per-issue path
 #     a single `issues` event would take (`workflow_dispatch` with `issue_number` set), using the minted
 #     claude-engineer App token so the dispatched run's own actor is `claude-code-engineer[bot]` — an
@@ -131,8 +131,10 @@ jobs:
       # build assessment packets at all: it only needs the NUMBERS of open issues that are unlabeled-and-
       # unescalated per AGENTS.md's disposition lifecycle ("Issue tracker — dispositions") — carrying NO
       # disposition label at all (`ready`, `needs-shaping`, `blocked`, `parked`, `other`) and no escalation
-      # label (`needs-human`, `needs-senior-engineer`) — and carry no assessment comment yet (the
-      # event-missed-stragglers predicate). Those numbers are dispatched (see sweep-dispatch-rollup below),
+      # label (`needs-human`, `needs-senior-engineer`, `needs-dispatcher` — AGENTS.md's escalation section
+      # defines all three as escalations, so all three are excluded, not just the two the senior-engineer
+      # leg introduced) — and carry no assessment comment yet (the event-missed-stragglers predicate). Those
+      # numbers are dispatched (see sweep-dispatch-rollup below),
       # one per-issue `workflow_dispatch` run each, instead of being assessed inline.
       - name: Build ticket packet(s) / gather stragglers
         id: build
@@ -216,7 +218,8 @@ jobs:
               def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
               [ .[] | select(
                   (.labels | map(.name) | any(. == "ready" or . == "blocked" or . == "parked" or . == "other"
-                    or . == "needs-human" or . == "needs-senior-engineer" or . == "needs-shaping")) | not
+                    or . == "needs-human" or . == "needs-senior-engineer" or . == "needs-dispatcher"
+                    or . == "needs-shaping")) | not
                 ) | select(
                   ( [ .comments[]
                       | select((.author.login // "" | canon_login) == "claude-code-engineer[bot]")
@@ -696,7 +699,8 @@ jobs:
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
             [ .[] | select(
                 (.labels | map(.name) | any(. == "ready" or . == "blocked" or . == "parked" or . == "other"
-                  or . == "needs-human" or . == "needs-senior-engineer" or . == "needs-shaping")) | not
+                  or . == "needs-human" or . == "needs-senior-engineer" or . == "needs-dispatcher"
+                  or . == "needs-shaping")) | not
               ) | ( .comments
                     | map(select((.author.login // "" | canon_login) == "claude-code-engineer[bot]"))
                     | map(.body // "") | map(select(startswith($marker))) | first ) as $m

@@ -216,9 +216,11 @@ itself, ships by labeling an Issue `ready`.
   of this PR.) The senior-engineer leg additionally needs `SENIOR_ENGINEER_APP_ID` +
   `SENIOR_ENGINEER_APP_PRIVATE_KEY`, but by design fails gracefully (a clear skip log line) rather than
   loudly while those two are unset, since it's an optional-until-provisioned addition to an already-working
-  pipeline, not a bring-up dependency the way the original six are. The triager's sweep leg additionally
-  needs the `CLAUDE_APP` GitHub App granted `Actions: write` (alongside its existing Issues/Contents scopes)
-  so it can dispatch a per-issue assessment run for each straggler it finds.
+  pipeline, not a bring-up dependency the way the original six are. Two legs additionally need `Actions:
+  write` granted to a GitHub App: the triager's sweep leg needs it on `CLAUDE_APP` (alongside its existing
+  Issues/Contents scopes) to dispatch a per-issue assessment run for each straggler it finds, and the
+  reconciler needs it on `CODEX_APP` to re-fire `review-on-pr.yml` via `workflow_dispatch` for a mergeable-
+  but-unreviewed head (`reconcile-prs.yml`'s `handle_mergeable`).
 - **Required-check status (as-built):** branch protection on `main` requires the `checks` status (the
   `checks.yml` Action) as a required GitHub-reported status, with `review-on-pr`'s native cross-family
   review as the required approving review — added via the owner-token maintenance path
@@ -260,14 +262,19 @@ guidance. AGENTS.md holds the issue contract, not local workflow paths.
 - **`other`** — doesn't fit the others; a recurring `other` is the signal to evolve the vocabulary.
 
 **Triager (event-driven per-ticket assessment; ported from automated-researcher#437/#497 via
-agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reopened Issue within minutes —
-two independent blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses)
-against `.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
+agentic-engineering#63):** `triage-assess.yml` assesses every newly opened/reopened Issue **from an
+allowlisted sender** (the researcher or one of the two engineer bots) within minutes — two independent
+blind model assessments (Fable, Sol — the same cross-family split `review-on-pr.yml` uses) against
+`.github/triage/RUBRIC.md`, then a sighted adjudication pass that sees both and proposes a verdict
 (`DO`/`SKIP`/`ASK`), an optional body-edit, and (for `DO`) a wave number — posted as a single idempotent
-on-ticket assessment comment, never a label or body write. A weekly backstop sweep (`schedule`) catches
-issues an event missed: it dispatches the same per-ticket assessment for every open, unlabeled-and-
-unescalated issue with no assessment comment yet, then rebuilds a rollup digest comment on the tracking
-issue (#64) listing every ticket already assessed and still awaiting a researcher decision. `needs-design`
+on-ticket assessment comment, never a label or body write. This repo is public, so an Issue filed or
+reopened by anyone else does NOT get this event-driven pass (it would otherwise let an outside filer trigger
+paid model calls for free) — it is instead picked up by the weekly backstop sweep below, on that sweep's own
+cadence rather than within minutes. A weekly backstop sweep (`schedule`) catches issues an event missed —
+both genuinely event-missed stragglers and every non-allowlisted-sender filing, which always lands here
+first: it dispatches the same per-ticket assessment for every open, unlabeled-and-unescalated issue with no
+assessment comment yet, then rebuilds a rollup digest comment on the tracking issue (#64) listing every
+ticket already assessed and still awaiting a researcher decision. `needs-design`
 is retired, same as automated-researcher's own convention — there is no separate "awaiting shaping" label
 this triager introduces or resurrects; an Issue with no disposition is either fresh (about to get its
 event-driven assessment) or already carries the triager's assessment comment, in which case the citation
