@@ -189,8 +189,14 @@ itself, ships by labeling an Issue `ready`.
   (round-budgeted; escalates to `needs-senior-engineer` instead of nudging forever once the head stops
   moving — see the senior-engineer leg above); `mergeable == MERGEABLE` with no completed codex review at
   the current head → re-fire `review-on-pr.yml` via the actuator above (the residual true-event-loss case,
-  if one exists). It also skips any PR already carrying `needs-human` or `needs-dispatcher` unconditionally —
-  those mean a person, or the implementor's own self-escalation, is already the thing to unblock. The
+  if one exists); `mergeable == MERGEABLE` with a completed codex review AT THE CURRENT HEAD in
+  `CHANGES_REQUESTED` state and no addressing dispatch mention since (antondelafuente/automated-researcher#515) →
+  re-derives the same consecutive-round count `review-on-pr.yml`'s submit-verdict uses and re-posts (or
+  escalates past) the same auto-dispatch mention, so a review predating auto-dispatch's own merge, or a
+  dispatch mention that silently failed to post, isn't stranded with no further pipeline event ever arriving
+  (this leg is invisible to the other two: the PR IS mergeable, and IS reviewed-at-head). It also skips any
+  PR already carrying `needs-human` or `needs-dispatcher` unconditionally — those mean a person, or the
+  implementor's own self-escalation, is already the thing to unblock. The
   round-limit escalation applies the `needs-senior-engineer` label AND directly dispatches
   `senior-engineer.yml` via its `workflow_dispatch` actuator (inputs: `pr_number`, `summoned_by=reconciler`)
   — a still-CONFLICTING PR has no mergeable ref, so GitHub creates no `pull_request` run for that workflow's

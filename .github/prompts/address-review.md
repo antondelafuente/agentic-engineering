@@ -15,7 +15,9 @@ The triggering comment was:
    - `gh pr view {{PR_NUMBER}} --repo {{REPO}} --json body,title` for the PR description.
    - The workflow already fetched and filtered this PR's reviews and comment thread for you, snapshotted at
      dispatch time: only reviews from the codex engineer bot and comments from the researcher or the claude
-     engineer bot itself are kept, oldest first. Anything from any other author — anyone can review or
+     engineer bot itself are kept, oldest first (the senior-engineer bot's own past comments aren't retained
+     in this historical snapshot — when it's the one that dispatched this run, its guidance instead reaches
+     you as the triggering comment quoted above). Anything from any other author — anyone can review or
      comment on an open PR on a public repo — was dropped before this prompt was rendered and is logged in
      the workflow run; it never reached you. That filtered thread follows, between the markers:
 
@@ -55,9 +57,10 @@ The triggering comment was:
 ## Constraints
 
 - You hold `ANTHROPIC_API_KEY` and a short-lived write-scoped GitHub token for the duration of this run.
-  This repo is **public**, so this run only ever happens because an allowlisted actor (the researcher or the
-  codex engineer bot) mentioned you on a PR the workflow re-verified is same-repo and authored by you — that
-  predicate is what makes "repo-controlled code" here safe to execute: it reduces to code from `main`, or
+  This repo is **public**, so this run only ever happens because an allowlisted actor (the researcher, the
+  codex engineer bot, or the senior-engineer bot) mentioned you on a PR the workflow re-verified is
+  same-repo and authored by you — that predicate is what makes "repo-controlled code" here safe to execute:
+  it reduces to code from `main`, or
   code an earlier allowlisted-triggered run of this same pipeline wrote on this same PR branch. It is never
   arbitrary fork or drive-by-comment content — see AGENTS.md's "GitHub-native SWE pipeline" section for the
   full accepted-risk statement. Do not go out of your way to reduce this further (e.g. don't refuse to run
