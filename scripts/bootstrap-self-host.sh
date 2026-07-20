@@ -13,10 +13,15 @@
 #      misresolve against the target repo's own issue tracker once it's copied elsewhere (AGENTS.md's
 #      "Cross-repo references" rule: a same-repo bare ref becomes exactly this hazard the moment it's
 #      copied into a different repo unqualified).
-#   2. Ensures --target-dir/AGENTS.md carries the <!-- CODEX-REVIEW-GUIDANCE:BEGIN/END --> block
+#   2. Guards the target's copy of .aar-ci/checks.sh (not this repo's own): its README/marketplace-namespace
+#      and AGENTS.md disposition-reference checks are inline gates coupled to this repo's own plugin/
+#      marketplace/disposition-triage product, so they'd otherwise fail any target PR that merely touches
+#      README.md/AGENTS.md. Prepending an existence guard on the product file each check depends on makes
+#      both self-activate only if the target later adopts that file — a no-op everywhere else.
+#   3. Ensures --target-dir/AGENTS.md carries the <!-- CODEX-REVIEW-GUIDANCE:BEGIN/END --> block
 #      review-on-pr.yml reads its P0/P1 severity convention from (creating a minimal AGENTS.md if none
 #      exists, or appending the block if one exists without it).
-#   3. With --senior-engineer-slug, additionally installs the senior-engineer leg (in-flight PR
+#   4. With --senior-engineer-slug, additionally installs the senior-engineer leg (in-flight PR
 #      adjudication): senior-engineer.yml + its prompt. Without it, review-on-pr.yml's round-limit and
 #      reconcile-prs.yml's own escalations still apply `needs-senior-engineer`, but nothing consumes it —
 #      identical to how this repo's OWN pipeline behaves before that leg's App/secrets are provisioned
@@ -259,6 +264,53 @@ for rel in \
 ; do
   copy_verbatim "$rel"
 done
+
+# Target-only guard on the copied .aar-ci/checks.sh (agentic-engineering#73 senior-engineer adjudication):
+# two of checks.sh's gate lines are inline checks coupled to THIS repo's own plugin/marketplace/
+# disposition-triage product (README/marketplace-namespace sync, AGENTS.md disposition-reference sync) that
+# a self-hosted target isn't necessarily adopting. Left as-is, both deterministically fail an ordinary
+# target PR that touches README.md/AGENTS.md once `checks` is a required status check -- including this
+# script's own initial commit. Prepending an existence guard on the product file each check actually depends
+# on makes both checks self-activate only if/when the target later adopts that file, and is a provable no-op
+# in THIS repo (both guard files exist here on every branch, so THIS repo's own required-check bundle -- a
+# restricted file -- is never touched; only the copy written into the target is transformed). Matched as
+# fixed strings (not `sed` against these regex-heavy lines) and asserted to occur exactly once each, so a
+# future drift in checks.sh's own gate lines fails this script loudly instead of silently shipping an
+# unguarded copy. Runs after the ref-qualify sed above; neither anchor contains a `#N` ref, so it matches the
+# post-sed copy.
+CHECKS_COPY="$TARGET_DIR/.aar-ci/checks.sh"
+if ! CHECKS_COPY="$CHECKS_COPY" python3 - <<'PY'
+import os
+import sys
+
+path = os.environ["CHECKS_COPY"]
+text = open(path).read()
+
+replacements = [
+    (
+        r"""if printf '%s\n' "${PATHS[@]}" | grep -Eq '^(README\.md|\.claude-plugin/marketplace\.json)$'; then""",
+        r"""if [ -f "$ROOT/.claude-plugin/marketplace.json" ] && printf '%s\n' "${PATHS[@]}" | grep -Eq '^(README\.md|\.claude-plugin/marketplace\.json)$'; then""",
+    ),
+    (
+        r"""if printf '%s\n' "${PATHS[@]}" | grep -Eq '^(AGENTS\.md|plugins/[^/]+/skills/[^/]+/references/DISPOSITIONS\.md|plugins/aar-engineering/skills/ship-change/scripts/wf\.sh)$'; then""",
+        r"""if [ -f "$ROOT/plugins/aar-engineering/skills/ship-change/references/DISPOSITIONS.md" ] && printf '%s\n' "${PATHS[@]}" | grep -Eq '^(AGENTS\.md|plugins/[^/]+/skills/[^/]+/references/DISPOSITIONS\.md|plugins/aar-engineering/skills/ship-change/scripts/wf\.sh)$'; then""",
+    ),
+]
+
+for old, new in replacements:
+    count = text.count(old)
+    if count != 1:
+        print(f"expected exactly 1 occurrence of anchor, found {count}: {old!r}", file=sys.stderr)
+        sys.exit(1)
+    text = text.replace(old, new, 1)
+
+open(path, "w").write(text)
+PY
+then
+  echo "::error::failed to apply existence guards to $CHECKS_COPY's README/marketplace and AGENTS.md/disposition gate lines -- checks.sh's own anchor lines may have drifted from what this script expects (agentic-engineering#73)" >&2
+  exit 1
+fi
+echo "[bootstrap] guarded $CHECKS_COPY's README/marketplace and AGENTS.md/disposition-reference checks with target-adoption existence checks (self-activate only if the target later adopts those product files)" >&2
 
 # Guard: every hard-coded identity string this repo's workflows carry must have been substituted (or, for
 # `senior-engineer-agent[bot]` when --senior-engineer-slug wasn't given, be one this script deliberately
