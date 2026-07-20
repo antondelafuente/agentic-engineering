@@ -566,9 +566,12 @@ jobs:
           set -euo pipefail
 
           # Hard gate (mirroring antondelafuente/automated-researcher#502 point 3): an escalation label already parked this
-          # PR with the senior-engineer leg, a human, or the implementor's own needs-dispatcher
-          # self-escalation (AGENTS.md's escalation section) -- the automated loop must never post another
-          # dispatch mention or duplicate escalation on top of that, regardless of round count.
+          # PR with the senior-engineer leg, a human, or (legacy, human-applied only -- agentic-engineering#74)
+          # needs-dispatcher -- the automated loop must never post another dispatch mention or duplicate
+          # escalation on top of that, regardless of round count. This is only an immediate skip, not a
+          # permanent one: reconcile-prs.yml's sweep re-dispatches a stranded needs-senior-engineer, and swaps
+          # a stale needs-dispatcher for needs-senior-engineer and summons the adjudicator, once either has sat
+          # past its grace window with no activity -- so this gate never deadlocks a PR forever on its own.
           labels=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           case ",$labels," in
             *,needs-senior-engineer,*) echo "PR #$PR_NUMBER: needs-senior-engineer already set; skipping auto-dispatch/escalation"; exit 0 ;;

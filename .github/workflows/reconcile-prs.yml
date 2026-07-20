@@ -44,6 +44,26 @@ name: reconcile-prs
 #     used to skip every needs-senior-engineer PR unconditionally, which left a stranded one deadlocked
 #     forever (it can never regain a pipeline event on its own). This leg re-dispatches senior-engineer.yml
 #     (same `summoned_by=reconciler` marker as the conflict leg above) instead of leaving it stranded.
+#   - `needs-dispatcher` present with its `labeled` event (or, if newer, the PR's latest comment FROM AN
+#     ALLOWLISTED ACTOR) older than a grace window (agentic-engineering#74): this is the implementor's own
+#     legacy self-escalation label (AGENTS.md's escalation section) -- nothing automated applies it anymore,
+#     but a human can still apply it by hand, and it has no automated consumer of its own. Left as an
+#     unconditional skip, a stale one deadlocks the PR forever exactly the way a stranded
+#     needs-senior-engineer used to (agentic-engineering#73: round-3 self-escalation on a disputed P0 stood
+#     down every leg until a researcher-side session hand-summoned senior-engineer 26 minutes later). Reuses
+#     the same grace-window idiom as the needs-senior-engineer leg just above rather than a parallel
+#     mechanism: once the label (or any newer activity from `DISPATCHER_ACTIVITY_ALLOW`) has sat quiet past
+#     the grace window, swap it for needs-senior-engineer and summon the adjudicator -- the empirically
+#     proven right consumer for a stuck/disputed implementor escalation. This repo is public
+#     (see AGENTS.md's "GitHub-native SWE pipeline" trust model), so the comment read is author-filtered to
+#     that same allowlist: an unfiltered "latest comment of any kind" would let any drive-by account comment
+#     on the PR to indefinitely reset the grace window and permanently suppress recovery, which is exactly
+#     the deadlock this leg exists to repair. The summons is a plain label swap on a still-CONFLICTING PR
+#     (mirroring the conflict leg's
+#     own rationale: no buildable merge ref means GitHub's `labeled` event never fires, so the swap alone
+#     would strand the escalation), but on any other mergeable state the label swap's own `labeled` event
+#     already summons senior-engineer.yml -- an explicit workflow_dispatch there too would queue a second run
+#     behind it (its concurrency group queues rather than cancels), double-running one summons.
 # See AGENTS.md "GitHub-native SWE pipeline (BYOK)" for the full trust model this implements.
 #
 # antondelafuente/automated-researcher#513: GitHub emits no event when a PR becomes conflicted, but the event that CAUSES
@@ -146,7 +166,9 @@ jobs:
           # Fourth leg (antondelafuente/automated-researcher#529): comfortably above senior-engineer.yml's own 30-minute
           # Claude-CLI timeout on its `adjudicate` job -- needs-senior-engineer activity (the label
           # application, or a later adjudication comment) more recent than this is treated as a summons
-          # still in flight, not yet stranded.
+          # still in flight, not yet stranded. Reused as-is (agentic-engineering#74) by the fifth leg's
+          # needs-dispatcher stranding check below, rather than a parallel constant -- same idiom, same
+          # threshold, one grace window for both flavors of stuck implementor escalation.
           SENIOR_ENGINEER_GRACE_SECONDS=$((40 * 60))
           # Shared budget with review-on-pr.yml's submit-verdict step (its LIMIT=3) -- this leg re-derives
           # and re-acts on the SAME consecutive-CHANGES_REQUESTED count, not a separate counter, so a PR
@@ -157,6 +179,17 @@ jobs:
           # predicate this leg checks for is "did the SAME set of identities that can trigger an addressing
           # round already do so", not merely "any comment exists".
           DISPATCH_MENTION_ALLOW='["antondelafuente","codex-engineer[bot]","senior-engineer-agent[bot]"]'
+          # Same allowlisted-actor set the rest of this pipeline trusts (address-review.yml's comment-author
+          # allowlist), but WITH the claude engineer bot added back in -- unlike DISPATCH_MENTION_ALLOW above
+          # (which excludes it because a self-authored mention shouldn't count as external proof that an
+          # addressing round already happened), a blocked implementor's own follow-up comment IS the activity
+          # signal handle_stranded_dispatcher needs: AGENTS.md's escalation section documents a blocked
+          # implementor as now just "commenting explaining the block and stops", and that comment is exactly
+          # the "block already being worked" evidence the grace-window extension exists to recognize. This
+          # repo is public, so `needs-dispatcher`'s comment read below is author-filtered to this list rather
+          # than accepting any comment: an unfiltered latest-comment read would let any drive-by account
+          # indefinitely reset the grace window and permanently suppress recovery of a stale label.
+          DISPATCHER_ACTIVITY_ALLOW='["antondelafuente","codex-engineer[bot]","senior-engineer-agent[bot]","claude-code-engineer[bot]"]'
           now_epoch=$(date -u +%s)
 
           # Lazy-mergeability retry (antondelafuente/automated-researcher#513): right after a push, GitHub's mergeability
@@ -238,6 +271,97 @@ jobs:
             echo "PR #$n: needs-senior-engineer applied at $label_ts (most recent adjudication comment at ${comment_ts:-none}) with no activity in the last ${elapsed}s and the label still present -- that summons appears stranded (e.g. a dispatch that failed, a run that crashed or timed out after posting its comment, or a label-removal that itself failed); re-dispatching senior-engineer.yml"
             if ! GH_TOKEN="$RECONCILER_ACTIONS_TOKEN" gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
               echo "::warning::PR #$n: workflow_dispatch of senior-engineer.yml failed; leaving needs-senior-engineer in place for a later tick to retry"
+              return 1
+            fi
+          }
+
+          # handle_stranded_dispatcher (agentic-engineering#74): needs-dispatcher is the implementor's own
+          # legacy self-escalation (AGENTS.md's escalation section) -- nothing automated applies it anymore,
+          # but a human still can, and unlike needs-senior-engineer it has no adjudication-comment signal of
+          # its own. AGENTS.md documents recovery as gated on "the label, with no newer activity" -- a
+          # human reply after applying the label is a sign the block is already being worked, so (unlike a
+          # bare label-age check) a newer PR comment also extends the grace window, same as a newer
+          # adjudication comment does for handle_stranded_senior_engineer above. Unlike that leg's single
+          # trusted commenter (senior-engineer-agent[bot] only), "activity" here has to admit a real human
+          # reply too -- but this repo is public (AGENTS.md's "GitHub-native SWE pipeline" trust model), so
+          # the read is author-filtered to DISPATCHER_ACTIVITY_ALLOW rather than accepting literally any
+          # comment: without that filter, any drive-by account could comment on the PR to indefinitely reset
+          # the grace window, permanently suppressing recovery of a stale label -- the exact deadlock this
+          # leg exists to repair. Once the later of the label and the PR's latest allowlisted comment is
+          # older than SENIOR_ENGINEER_GRACE_SECONDS (same idiom, same threshold as
+          # handle_stranded_senior_engineer above -- not a parallel mechanism), treat it as stranded: swap it
+          # for needs-senior-engineer and summon the adjudicator, the consumer agentic-engineering#73 proved
+          # empirically resolves this class of stuck escalation. A later tick's handle_stranded_senior_engineer
+          # branch takes over from there, same as any other needs-senior-engineer summons.
+          handle_stranded_dispatcher() {
+            local n="$1"
+
+            local label_ts
+            if ! label_ts=$(gh api "repos/$REPO/issues/$n/events" --paginate | jq -s -r '
+              (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                | map(select(.event == "labeled" and .label.name == "needs-dispatcher")) | sort_by(.created_at) | last | .created_at // empty
+            '); then
+              echo "::warning::PR #$n: reading needs-dispatcher label history failed; skipping this tick"
+              return 1
+            fi
+            if [ -z "$label_ts" ]; then
+              echo "PR #$n: needs-dispatcher set but no labeled event found in its timeline; skipping this tick"
+              return
+            fi
+
+            local comment_ts
+            if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s -r --argjson allow "$DISPATCHER_ACTIVITY_ALLOW" '
+              def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
+              (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                | map(select(((.user.login | canon_login) as $c | ($allow | index($c)) != null)))
+                | sort_by(.created_at) | last | .created_at // empty
+            '); then
+              echo "::warning::PR #$n: reading comment history failed; skipping this tick"
+              return 1
+            fi
+
+            local reference_ts="$label_ts"
+            if [ -n "$comment_ts" ] && [[ "$comment_ts" > "$label_ts" ]]; then
+              reference_ts="$comment_ts"
+            fi
+
+            local elapsed=$(( now_epoch - $(date -u -d "$reference_ts" +%s) ))
+            if [ "$elapsed" -lt "$SENIOR_ENGINEER_GRACE_SECONDS" ]; then
+              echo "PR #$n: needs-dispatcher applied at $label_ts (most recent allowlisted-actor PR comment at ${comment_ts:-none}) as recently as ${elapsed}s ago; treating as still awaiting manual attention, skipping this tick"
+              return
+            fi
+
+            echo "PR #$n: needs-dispatcher applied at $label_ts (most recent allowlisted-actor PR comment at ${comment_ts:-none}) with no activity in the last ${elapsed}s -- this label has no automated consumer of its own, so treating it as stranded; swapping for needs-senior-engineer and summoning the adjudicator"
+            if ! gh pr edit "$n" --repo "$REPO" --add-label needs-senior-engineer --remove-label needs-dispatcher; then
+              echo "::warning::PR #$n: failed to swap needs-dispatcher for needs-senior-engineer; leaving as-is for a later tick to retry"
+              return 1
+            fi
+
+            # Only a CONFLICTING PR has no buildable merge ref for GitHub's `pull_request: labeled` event to
+            # fire against (same rationale as handle_conflicted's own escalation branch below) -- on any
+            # other mergeable state, the label swap just above already summons senior-engineer.yml on its
+            # own via that event, so an explicit workflow_dispatch here too would queue a SECOND run behind
+            # it (senior-engineer.yml's concurrency group queues rather than cancels), double-running one
+            # summons. Re-check fresh rather than trusting a mergeable value read earlier in this tick (the
+            # label swap itself takes a moment, and mergeability is computed lazily -- antondelafuente/automated-researcher#513);
+            # retry an unresolved UNKNOWN the same bounded number of times as the main loop below, then fall
+            # back to treating it like a resolved non-CONFLICTING state rather than looping forever, since an
+            # explicit dispatch is only ever load-bearing for the CONFLICTING case.
+            local fresh_mergeable retry_attempt=1
+            fresh_mergeable=$(gh pr view "$n" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")
+            while [ "$fresh_mergeable" = "UNKNOWN" ] && [ "$retry_attempt" -lt "$MERGEABILITY_RETRY_ATTEMPTS" ]; do
+              sleep "$MERGEABILITY_RETRY_SECONDS"
+              fresh_mergeable=$(gh pr view "$n" --repo "$REPO" --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")
+              retry_attempt=$((retry_attempt + 1))
+            done
+
+            if [ "$fresh_mergeable" != "CONFLICTING" ]; then
+              echo "PR #$n: mergeable status '$fresh_mergeable' after the label swap -- its own labeled event already summons senior-engineer.yml; not also workflow_dispatching it to avoid a duplicate run"
+              return
+            fi
+
+            if ! GH_TOKEN="$RECONCILER_ACTIONS_TOKEN" gh workflow run senior-engineer.yml --repo "$REPO" -f "pr_number=$n" -f "summoned_by=reconciler"; then
+              echo "::warning::PR #$n: workflow_dispatch of senior-engineer.yml failed after swapping labels; leaving needs-senior-engineer in place for the stranded-senior-engineer leg above to retry"
               return 1
             fi
           }
@@ -507,27 +631,31 @@ jobs:
             # needs-senior-engineer/needs-human (antondelafuente/automated-researcher#438) mean the in-flight judgment layer
             # is already working this PR or has already escalated it to a person -- the reconciler must not
             # pile a duplicate resolution-dispatch round on top of that. needs-dispatcher is this repo's own
-            # escalation label (AGENTS.md's escalation section): the implementor already self-escalated as
-            # blocked or contradicted, and the reconciler must not re-dispatch/re-escalate over that either.
-            # needs-senior-engineer is no longer an unconditional skip (antondelafuente/automated-researcher#529):
-            # handle_stranded_senior_engineer re-dispatches it if the label has no adjudication comment behind
-            # it past its grace window, instead of leaving a stranded one deadlocked forever. needs-human and
-            # needs-dispatcher stay plain skips -- both are terminal states only a human (or the implementor's
-            # own next dispatch) clears. Branch ORDER below is load-bearing for needs-human vs
-            # needs-senior-engineer: both labels can coexist -- senior-engineer.yml's adjudicate job can
-            # verify/add needs-human and then have its "Clear needs-senior-engineer" step fail (its failure()
-            # step deliberately leaves the stale label in place), and loop-guard-escalate's single
-            # `--add-label needs-human --remove-label needs-senior-engineer` can have the add land while the
-            # remove fails -- so needs-human must be matched FIRST (a bash `case` takes the first matching
-            # branch), or a PR carrying both labels would be routed to handle_stranded_senior_engineer and
-            # re-dispatched instead of parked for a human, contradicting the terminal-skip contract above.
-            # Recovery consequence: once a human clears needs-human, the stale needs-senior-engineer becomes
-            # visible to this sweep again and is re-dispatched after its grace window -- that is the intended
-            # self-heal for the leftover label, not a bug.
+            # legacy escalation label (AGENTS.md's escalation section): nothing automated applies it anymore,
+            # but a human still can. needs-human stays a plain, terminal skip -- only a human clears it.
+            # needs-senior-engineer and needs-dispatcher are NOT unconditional skips (antondelafuente/automated-researcher#529;
+            # agentic-engineering#74): handle_stranded_senior_engineer re-dispatches a needs-senior-engineer
+            # summons that has no adjudication comment behind it past its grace window, and
+            # handle_stranded_dispatcher swaps a needs-dispatcher label with no activity behind it past the
+            # same grace window for needs-senior-engineer and summons the adjudicator -- neither is left
+            # deadlocked forever the way an unconditional skip would. Branch ORDER below is load-bearing:
+            # needs-human must be matched FIRST (a bash `case` takes the first matching branch) since
+            # senior-engineer.yml's adjudicate job can leave both needs-human and a stale needs-senior-engineer
+            # present at once (its "Clear needs-senior-engineer" step can fail after loop-guard-escalate's
+            # `--add-label needs-human --remove-label needs-senior-engineer` only half-lands) -- matching
+            # needs-senior-engineer first would re-dispatch it instead of parking the PR for a human. Recovery
+            # consequence: once a human clears needs-human, any stale needs-senior-engineer (or needs-dispatcher)
+            # becomes visible to this sweep again and is re-dispatched after its grace window -- that is the
+            # intended self-heal for the leftover label, not a bug.
             labels=$(jq -r '[.labels[].name] | join(",")' <<<"$pr")
             case ",$labels," in
               *,needs-human,*) echo "PR #$n: needs-human already set, skipping"; continue ;;
-              *,needs-dispatcher,*) echo "PR #$n: needs-dispatcher already set, skipping"; continue ;;
+              *,needs-dispatcher,*)
+                if ! handle_stranded_dispatcher "$n"; then
+                  echo "::warning::PR #$n: stranded needs-dispatcher handling failed this tick"
+                fi
+                continue
+                ;;
               *,needs-senior-engineer,*)
                 if ! handle_stranded_senior_engineer "$n"; then
                   echo "::warning::PR #$n: stranded needs-senior-engineer handling failed this tick"

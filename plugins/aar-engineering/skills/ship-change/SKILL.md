@@ -87,12 +87,17 @@ Actions pipeline does that (`AGENTS.md` "GitHub-native SWE pipeline"). What's le
 1. **Issue quality.** Shape the Issue so an implementor who cannot ask questions can act on it directly:
    Problem / Design / Non-goals / Acceptance, concrete enough to remove ambiguity before it ever reaches
    `ready`.
-2. **Answering `needs-dispatcher`.** Recovery is surface-specific (`AGENTS.md` "GitHub-native SWE pipeline",
-   Escalation): escalation on an **Issue** (no PR yet) → reply in an issue comment and remove the label — the
-   re-flip to `ready` is again the researcher's transition, not something you do as part of answering.
-   Escalation, or a review stall, on a **PR** → an allowlisted `@claude-code-engineer <guidance>` comment on
-   that PR, which triggers `address-review.yml`. Scope is **clarification only** either way: a genuine design
-   change means re-shaping the Issue, not steering the PR directly.
+2. **Answering `needs-dispatcher`.** This is a legacy, human-applied-only label now (`AGENTS.md`
+   "GitHub-native SWE pipeline", Escalation) — no automated leg applies it anymore. Recovery is
+   surface-specific: on an **Issue** (no PR yet) → reply in an issue comment and remove the label — the
+   re-flip to `ready` is again the researcher's transition, not something you do as part of answering. On a
+   **PR** → an allowlisted `@claude-code-engineer <guidance>` comment on that PR, which triggers
+   `address-review.yml`, remains the fastest path; if left unanswered instead, the reconciler recovers it
+   automatically once it's sat past its grace window, swapping it for `needs-senior-engineer` and summoning
+   the adjudicator itself — a reply is a shortcut, not a requirement, for the PR case. A review stall on a
+   **PR** (no `needs-dispatcher` involved) is answered the same allowlisted-mention way. Scope is
+   **clarification only** either way: a genuine design change means re-shaping the Issue, not steering the PR
+   directly.
 3. **Surfacing an `update-branch` need on THIS issue's pipeline PR**, when its base branch has gained a fix
    the PR needs: the shaping agent's duty is only to flag that it's needed. After the base fix lands, the
    RESEARCHER — their own allowlisted identity, not this skill's write path — runs `gh pr update-branch <n>`

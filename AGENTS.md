@@ -127,16 +127,20 @@ itself, ships by labeling an Issue `ready`.
   (`.github/prompts/address-review.md`), gated to the researcher + the codex engineer bot, same allowlist
   minus the claude bot itself. It never invokes the review itself — pushing a fix fires `synchronize`, which
   `review-on-pr.yml`'s own `cancel-in-progress` already handles.
-- **Escalation (`needs-dispatcher`):** if the implementor is blocked, or a review finding conflicts with
-  what the issue specifies, it labels the PR (or the issue, if no PR yet) `needs-dispatcher` and comments
-  what's needed, then stops that thread of work. This defines only the label convention — the notifier that
-  surfaces `needs-dispatcher` to a session or the researcher is instance wiring, not part of this product
-  capability. A `ready` label's flip by an allowlisted human/bot is itself the "explicit dispatch" the
-  `ready` disposition (above) requires — there is no separate per-run naming step once the label lands.
-  `address-review.yml` runs use the same escalation convention on the PR it's already working.
-  `needs-dispatcher` is distinct from `needs-senior-engineer` below: it is the implementor's own
-  self-escalation when it is stuck or sees a contradiction, never applied by the round-limit/conflict-
-  stagnation machinery, which summons the senior engineer instead.
+- **Escalation (`needs-dispatcher`, legacy) — retired as an automated convention
+  (agentic-engineering#74):** in the dispatcher era, an implementor that was blocked or saw a review finding
+  conflict with what the issue specifies labeled the PR (or the issue, if no PR yet) `needs-dispatcher` and
+  stopped that thread of work for a human/dispatcher session to pick up. Nothing automated consumes that
+  label anymore, so `implement.md` / `address-review.md` no longer instruct an agent to apply it: a blocked
+  implementor now just comments explaining the block and stops, and (on a PR already carrying review rounds)
+  lets the pipeline's own round-limit escalation summon `needs-senior-engineer` below instead of
+  self-escalating — the adjudicator resolved agentic-engineering#73's round-3 disputed-P0 self-escalation
+  empirically in one pass once a human hand-summoned it. `needs-dispatcher` remains a recognized label a
+  human can still apply by hand (`triage-assess.yml` still treats it as an already-dispositioned marker on
+  Issues, and `scripts/bootstrap-self-host.sh` still creates it), but it is no longer a permanent stand-down
+  if left unanswered: see the reconciler below, which now treats a stale `needs-dispatcher` on a PR the same
+  way it treats a stranded `needs-senior-engineer` — a grace window, then a swap to `needs-senior-engineer`
+  and a summons, rather than an indefinite deadlock.
 - **Senior-engineer leg (in-flight PR adjudication; ported from antondelafuente/automated-researcher#438 via
   agentic-engineering#63):** `senior-engineer.yml` is summoned by the `needs-senior-engineer` label landing
   on a PR — by the reconciler's round-budget trip, by `review-on-pr.yml`'s own round-limit trip
@@ -195,9 +199,8 @@ itself, ships by labeling an Issue `ready`.
   escalates past) the same auto-dispatch mention, so a review predating auto-dispatch's own merge, or a
   dispatch mention that silently failed to post, isn't stranded with no further pipeline event ever arriving
   (this leg is invisible to the other two: the PR IS mergeable, and IS reviewed-at-head). It also skips any
-  PR already carrying `needs-human` or `needs-dispatcher` unconditionally — those mean a person, or the
-  implementor's own self-escalation, is already the thing to unblock. The
-  round-limit escalation applies the `needs-senior-engineer` label AND directly dispatches
+  PR already carrying `needs-human` unconditionally — that means a person is already the thing to unblock.
+  The round-limit escalation applies the `needs-senior-engineer` label AND directly dispatches
   `senior-engineer.yml` via its `workflow_dispatch` actuator (inputs: `pr_number`, `summoned_by=reconciler`)
   — a still-CONFLICTING PR has no mergeable ref, so GitHub creates no `pull_request` run for that workflow's
   `labeled` trigger to catch, and the label alone would silently strand the escalation with no adjudication
@@ -221,6 +224,28 @@ itself, ships by labeling an Issue `ready`.
   produces one. Per-call rollback perfection is still not the design goal for the label mutations
   themselves — a failed add/remove is logged and left for this same grace-window-and-re-dispatch check to
   repair on the next tick, not chased with deeper per-call error handling.
+  **`needs-dispatcher` recovery (agentic-engineering#74):** the same reconciler sweep no longer treats a
+  `needs-dispatcher` PR as an unconditional skip either. That label is legacy and human-applied only now
+  (the escalation section above) with no automated consumer of its own, so left unanswered it would
+  otherwise deadlock the PR forever exactly the way a stranded `needs-senior-engineer` used to
+  (agentic-engineering#73: a round-3 self-escalation on a disputed P0 stood every leg down until a
+  researcher-side session hand-summoned `senior-engineer.yml` 26 minutes later). Reusing the same
+  grace-window idiom rather than a parallel mechanism, once the later of `needs-dispatcher`'s `labeled`
+  event and the PR's latest comment from an allowlisted actor (`DISPATCHER_ACTIVITY_ALLOW`: the human
+  maintainer, the codex/senior-engineer bots, or the claude engineer bot's own follow-up explaining a block
+  — a reply from any of these is evidence the block is already being worked, same as a newer adjudication
+  comment extends the `needs-senior-engineer` grace window above) is older than
+  `SENIOR_ENGINEER_GRACE_SECONDS`, the sweep swaps the label for `needs-senior-engineer`. This repo is
+  public, so the comment read is author-filtered rather than trusting the latest comment of any kind —
+  otherwise any drive-by account could comment on the PR to indefinitely reset the grace window and
+  permanently suppress recovery. Whether it also
+  explicitly dispatches `senior-engineer.yml` (`summoned_by=reconciler`) depends on the PR's mergeability at
+  swap time: only a `CONFLICTING` PR has no buildable merge ref for the label swap's own `labeled` event to
+  fire against, so only there is the explicit dispatch load-bearing — on any other state that event already
+  summons the adjudicator on its own, and an explicit dispatch too would queue a second run behind it
+  (`senior-engineer.yml`'s concurrency group queues rather than cancels), double-running one summons. A
+  subsequent tick then falls through to the `needs-senior-engineer` recovery model above like any other
+  summons.
 - **Round-limit escalation now summons the senior engineer, not a human directly
   (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
   on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same
@@ -251,6 +276,10 @@ itself, ships by labeling an Issue `ready`.
   - Unblock a `needs-human` PR: answer the structured question the senior engineer posted, remove
     `needs-human`, and re-apply `needs-senior-engineer` if you want another automated adjudication pass, or
     comment `@claude-code-engineer` directly if you already know the exact fix.
+  - Unblock a `needs-dispatcher` Issue or PR (legacy, human-applied only): reply with the answer/guidance and
+    remove the label yourself for the fastest turnaround, same as above — or leave it, since the reconciler
+    now recovers a stale one on its own past its grace window (swaps it for `needs-senior-engineer` and
+    summons the adjudicator) rather than leaving it deadlocked.
 - **Secrets this flow needs** (instance-provisioned, never checked in): `ANTHROPIC_API_KEY`,
   `OPENAI_API_KEY`, `CLAUDE_APP_ID`, `CLAUDE_APP_PRIVATE_KEY`, `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`.
   Until all six are set, `ready` events fail loudly in the Actions tab (a missing-secret error at
@@ -278,11 +307,16 @@ Cross-repo issue/PR references are fully qualified (`owner/repo#N` or a full URL
 written — commits, PRs, docs, and chat — never a bare `#N`. A bare `#N` auto-links against whatever repo
 happens to be rendering it, not the repo the writer meant, and silently resolves to the wrong Issue or 404s.
 (This repo's own DISPOSITIONS block once carried exactly this failure — a `#49` meant for a different repo,
-fixed below.) A same-repo bare ref in `automated-researcher` becomes exactly this cross-repo hazard the
-moment it's copied into this repo unqualified — so every port/resync from `automated-researcher` must
-include a ref-qualification pass (prefixing every bare ref with `antondelafuente/`, including forms split
-across a line wrap) over the files it touched, before it's considered done; this class has re-imported
-itself on more than one sync already (agentic-engineering#65 rounds 4 and 7).
+fixed below.) **Scope: this rule governs references that cross a repo boundary** — a ref written in one
+repo pointing at another repo's Issue/PR, or any ref being copied between repos. A same-repo reference
+written from within this repo (this file's own repo-qualified `agentic-engineering#N` house form, or
+GitHub's `Closes #N` idiom in this repo's own commits and PR bodies — the pipeline flow above documents
+exactly that) is not cross-repo and is not what this rule prohibits. A same-repo bare ref in
+`automated-researcher` becomes exactly this cross-repo hazard the moment it's copied into this repo
+unqualified — so every port/resync from `automated-researcher` must include a ref-qualification pass
+(prefixing every bare ref with `antondelafuente/`, including forms split across a line wrap) over the files
+it touched, before it's considered done; this class has re-imported itself on more than one sync already
+(agentic-engineering#65 rounds 4 and 7).
 
 <!-- DISPOSITIONS:START -->
 ## Issue tracker — dispositions
