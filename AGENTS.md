@@ -231,9 +231,14 @@ itself, ships by labeling an Issue `ready`.
   (agentic-engineering#73: a round-3 self-escalation on a disputed P0 stood every leg down until a
   researcher-side session hand-summoned `senior-engineer.yml` 26 minutes later). Reusing the same
   grace-window idiom rather than a parallel mechanism, once the later of `needs-dispatcher`'s `labeled`
-  event and the PR's latest comment (a human reply is evidence the block is already being worked, same as a
-  newer adjudication comment extends the `needs-senior-engineer` grace window above) is older than
-  `SENIOR_ENGINEER_GRACE_SECONDS`, the sweep swaps the label for `needs-senior-engineer`. Whether it also
+  event and the PR's latest comment from an allowlisted actor (`DISPATCHER_ACTIVITY_ALLOW`: the human
+  maintainer, the codex/senior-engineer bots, or the claude engineer bot's own follow-up explaining a block
+  — a reply from any of these is evidence the block is already being worked, same as a newer adjudication
+  comment extends the `needs-senior-engineer` grace window above) is older than
+  `SENIOR_ENGINEER_GRACE_SECONDS`, the sweep swaps the label for `needs-senior-engineer`. This repo is
+  public, so the comment read is author-filtered rather than trusting the latest comment of any kind —
+  otherwise any drive-by account could comment on the PR to indefinitely reset the grace window and
+  permanently suppress recovery. Whether it also
   explicitly dispatches `senior-engineer.yml` (`summoned_by=reconciler`) depends on the PR's mergeability at
   swap time: only a `CONFLICTING` PR has no buildable merge ref for the label swap's own `labeled` event to
   fire against, so only there is the explicit dispatch load-bearing — on any other state that event already

@@ -44,17 +44,22 @@ name: reconcile-prs
 #     used to skip every needs-senior-engineer PR unconditionally, which left a stranded one deadlocked
 #     forever (it can never regain a pipeline event on its own). This leg re-dispatches senior-engineer.yml
 #     (same `summoned_by=reconciler` marker as the conflict leg above) instead of leaving it stranded.
-#   - `needs-dispatcher` present with its `labeled` event (or, if newer, the PR's latest comment) older than
-#     a grace window (agentic-engineering#74): this is the implementor's own legacy self-escalation label
-#     (AGENTS.md's escalation section) -- nothing automated applies it anymore, but a human can still apply
-#     it by hand, and it has no automated consumer of its own. Left as an unconditional skip, a stale one
-#     deadlocks the PR forever exactly the way a stranded needs-senior-engineer used to
-#     (agentic-engineering#73: round-3 self-escalation on a disputed P0 stood down every leg until a
-#     researcher-side session hand-summoned senior-engineer 26 minutes later). Reuses the same grace-window
-#     idiom as the needs-senior-engineer leg just above rather than a parallel mechanism: once the label (or
-#     any newer PR activity) has sat quiet past the grace window, swap it for needs-senior-engineer and
-#     summon the adjudicator -- the empirically proven right consumer for a stuck/disputed implementor
-#     escalation. The summons is a plain label swap on a still-CONFLICTING PR (mirroring the conflict leg's
+#   - `needs-dispatcher` present with its `labeled` event (or, if newer, the PR's latest comment FROM AN
+#     ALLOWLISTED ACTOR) older than a grace window (agentic-engineering#74): this is the implementor's own
+#     legacy self-escalation label (AGENTS.md's escalation section) -- nothing automated applies it anymore,
+#     but a human can still apply it by hand, and it has no automated consumer of its own. Left as an
+#     unconditional skip, a stale one deadlocks the PR forever exactly the way a stranded
+#     needs-senior-engineer used to (agentic-engineering#73: round-3 self-escalation on a disputed P0 stood
+#     down every leg until a researcher-side session hand-summoned senior-engineer 26 minutes later). Reuses
+#     the same grace-window idiom as the needs-senior-engineer leg just above rather than a parallel
+#     mechanism: once the label (or any newer activity from `DISPATCHER_ACTIVITY_ALLOW`) has sat quiet past
+#     the grace window, swap it for needs-senior-engineer and summon the adjudicator -- the empirically
+#     proven right consumer for a stuck/disputed implementor escalation. This repo is public
+#     (see AGENTS.md's "GitHub-native SWE pipeline" trust model), so the comment read is author-filtered to
+#     that same allowlist: an unfiltered "latest comment of any kind" would let any drive-by account comment
+#     on the PR to indefinitely reset the grace window and permanently suppress recovery, which is exactly
+#     the deadlock this leg exists to repair. The summons is a plain label swap on a still-CONFLICTING PR
+#     (mirroring the conflict leg's
 #     own rationale: no buildable merge ref means GitHub's `labeled` event never fires, so the swap alone
 #     would strand the escalation), but on any other mergeable state the label swap's own `labeled` event
 #     already summons senior-engineer.yml -- an explicit workflow_dispatch there too would queue a second run
@@ -174,6 +179,17 @@ jobs:
           # predicate this leg checks for is "did the SAME set of identities that can trigger an addressing
           # round already do so", not merely "any comment exists".
           DISPATCH_MENTION_ALLOW='["antondelafuente","codex-engineer[bot]","senior-engineer-agent[bot]"]'
+          # Same allowlisted-actor set the rest of this pipeline trusts (address-review.yml's comment-author
+          # allowlist), but WITH the claude engineer bot added back in -- unlike DISPATCH_MENTION_ALLOW above
+          # (which excludes it because a self-authored mention shouldn't count as external proof that an
+          # addressing round already happened), a blocked implementor's own follow-up comment IS the activity
+          # signal handle_stranded_dispatcher needs: AGENTS.md's escalation section documents a blocked
+          # implementor as now just "commenting explaining the block and stops", and that comment is exactly
+          # the "block already being worked" evidence the grace-window extension exists to recognize. This
+          # repo is public, so `needs-dispatcher`'s comment read below is author-filtered to this list rather
+          # than accepting any comment: an unfiltered latest-comment read would let any drive-by account
+          # indefinitely reset the grace window and permanently suppress recovery of a stale label.
+          DISPATCHER_ACTIVITY_ALLOW='["antondelafuente","codex-engineer[bot]","senior-engineer-agent[bot]","claude-code-engineer[bot]"]'
           now_epoch=$(date -u +%s)
 
           # Lazy-mergeability retry (antondelafuente/automated-researcher#513): right after a push, GitHub's mergeability
@@ -264,14 +280,19 @@ jobs:
           # but a human still can, and unlike needs-senior-engineer it has no adjudication-comment signal of
           # its own. AGENTS.md documents recovery as gated on "the label, with no newer activity" -- a
           # human reply after applying the label is a sign the block is already being worked, so (unlike a
-          # bare label-age check) a newer PR comment of any kind also extends the grace window, same as a
-          # newer adjudication comment does for handle_stranded_senior_engineer above. Once the later of the
-          # label and the PR's latest comment is older than SENIOR_ENGINEER_GRACE_SECONDS (same idiom, same
-          # threshold as handle_stranded_senior_engineer above -- not a parallel mechanism), treat it as
-          # stranded: swap it for needs-senior-engineer and summon the adjudicator, the consumer
-          # agentic-engineering#73 proved empirically resolves this class of stuck escalation. A later
-          # tick's handle_stranded_senior_engineer branch takes over from there, same as any other
-          # needs-senior-engineer summons.
+          # bare label-age check) a newer PR comment also extends the grace window, same as a newer
+          # adjudication comment does for handle_stranded_senior_engineer above. Unlike that leg's single
+          # trusted commenter (senior-engineer-agent[bot] only), "activity" here has to admit a real human
+          # reply too -- but this repo is public (AGENTS.md's "GitHub-native SWE pipeline" trust model), so
+          # the read is author-filtered to DISPATCHER_ACTIVITY_ALLOW rather than accepting literally any
+          # comment: without that filter, any drive-by account could comment on the PR to indefinitely reset
+          # the grace window, permanently suppressing recovery of a stale label -- the exact deadlock this
+          # leg exists to repair. Once the later of the label and the PR's latest allowlisted comment is
+          # older than SENIOR_ENGINEER_GRACE_SECONDS (same idiom, same threshold as
+          # handle_stranded_senior_engineer above -- not a parallel mechanism), treat it as stranded: swap it
+          # for needs-senior-engineer and summon the adjudicator, the consumer agentic-engineering#73 proved
+          # empirically resolves this class of stuck escalation. A later tick's handle_stranded_senior_engineer
+          # branch takes over from there, same as any other needs-senior-engineer summons.
           handle_stranded_dispatcher() {
             local n="$1"
 
@@ -289,8 +310,10 @@ jobs:
             fi
 
             local comment_ts
-            if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s -r '
+            if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s --argjson allow "$DISPATCHER_ACTIVITY_ALLOW" '
+              def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
               (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                | map(select(((.user.login | canon_login) as $c | ($allow | index($c)) != null)))
                 | sort_by(.created_at) | last | .created_at // empty
             '); then
               echo "::warning::PR #$n: reading comment history failed; skipping this tick"
@@ -304,11 +327,11 @@ jobs:
 
             local elapsed=$(( now_epoch - $(date -u -d "$reference_ts" +%s) ))
             if [ "$elapsed" -lt "$SENIOR_ENGINEER_GRACE_SECONDS" ]; then
-              echo "PR #$n: needs-dispatcher applied at $label_ts (most recent PR comment at ${comment_ts:-none}) as recently as ${elapsed}s ago; treating as still awaiting manual attention, skipping this tick"
+              echo "PR #$n: needs-dispatcher applied at $label_ts (most recent allowlisted-actor PR comment at ${comment_ts:-none}) as recently as ${elapsed}s ago; treating as still awaiting manual attention, skipping this tick"
               return
             fi
 
-            echo "PR #$n: needs-dispatcher applied at $label_ts (most recent PR comment at ${comment_ts:-none}) with no activity in the last ${elapsed}s -- this label has no automated consumer of its own, so treating it as stranded; swapping for needs-senior-engineer and summoning the adjudicator"
+            echo "PR #$n: needs-dispatcher applied at $label_ts (most recent allowlisted-actor PR comment at ${comment_ts:-none}) with no activity in the last ${elapsed}s -- this label has no automated consumer of its own, so treating it as stranded; swapping for needs-senior-engineer and summoning the adjudicator"
             if ! gh pr edit "$n" --repo "$REPO" --add-label needs-senior-engineer --remove-label needs-dispatcher; then
               echo "::warning::PR #$n: failed to swap needs-dispatcher for needs-senior-engineer; leaving as-is for a later tick to retry"
               return 1
