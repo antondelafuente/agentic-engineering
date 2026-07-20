@@ -163,13 +163,13 @@ If a plugin manifest changed, after a revert/merge refresh installed plugins:
 agentic-engineering ships its own changes through this `ship-change` (self-hosted). From Phase 2 on, its `main`
 is branch-protected like any product repo. Self-hosting this pipeline on another repo takes more than
 installing the skills, because the GitHub-native SWE pipeline (`implement-on-ready.yml` ->
-`review-on-pr.yml` -> `address-review.yml`, gated by `checks.yml`) is Actions/App infrastructure that lives
-outside any plugin: the target repo needs those workflow assets and prompts copied in; the identity
-substitutions the workflows hard-code throughout (the allowlisted researcher account, the two engineer
-Apps' slugs, and the git author used for commits) replaced with the new owner's own; the `ready` and
-`needs-human` labels created; two GitHub Apps installed with the documented permissions; the six Actions
-secrets provisioned; and branch protection on `main` set up alongside the repository's "Allow auto-merge"
-setting.
+`review-on-pr.yml` -> `address-review.yml` -> `reconcile-prs.yml`, gated by `checks.yml`) is Actions/App
+infrastructure that lives outside any plugin: the target repo needs those workflow assets and prompts
+copied in; the identity substitutions the workflows hard-code throughout (the allowlisted researcher
+account, the engineer Apps' slugs, and the git author used for commits) replaced with the new owner's own;
+the `ready`/`needs-human`/`needs-dispatcher`/`needs-senior-engineer` labels created; two GitHub Apps
+installed with the documented permissions; the six Actions secrets provisioned; and branch protection on
+`main` set up alongside the repository's "Allow auto-merge" setting.
 
 **`scripts/bootstrap-self-host.sh`** (agentic-engineering#61) automates the parts of this that are pure file
 templating or plain API calls:
@@ -178,22 +178,44 @@ templating or plain API calls:
 scripts/bootstrap-self-host.sh --target-dir <path-to-fresh-repo-checkout> \
   --researcher-login <your-github-login> \
   --claude-slug <claude-app-slug> --claude-bot-id <numeric-id> --codex-slug <codex-app-slug> \
+  [--senior-engineer-slug <senior-engineer-app-slug>] \
   [--repo <owner/name> --create-labels --branch-protection --enable-auto-merge]
 ```
 
-It copies `implement-on-ready.yml` / `review-on-pr.yml` / `address-review.yml` / `checks.yml`,
-`.github/prompts/{implement,address-review}.md`, `.github/scripts/canonical-login.sh`, and `.aar-ci/*`
-into the target, substituting every hard-coded identity string for the ones supplied (verified by a
-built-in leftover check — the run fails loudly rather than silently shipping this repo's own researcher
-login or bot slugs into the target), and ensures the target's `AGENTS.md` carries the
-`<!-- CODEX-REVIEW-GUIDANCE:BEGIN/END -->` block `review-on-pr.yml` reads its P0/P1 severity convention
-from. With `--repo` plus the three optional flags, it also creates the `ready`/`needs-human` labels, applies
-this repo's own branch-protection ruleset, and turns on "Allow auto-merge" via `gh api`.
+It copies `implement-on-ready.yml` / `review-on-pr.yml` / `address-review.yml` / `reconcile-prs.yml` /
+`checks.yml`, `.github/prompts/{implement,address-review}.md`, `.github/scripts/canonical-login.sh` (+ its
+smoke), and `.aar-ci/*` into the target, substituting every hard-coded identity string for the ones
+supplied (verified by a built-in leftover check — the run fails loudly rather than silently shipping this
+repo's own researcher login or bot slugs into the target) and qualifying every bare/repo-only issue
+reference the copied files' provenance comments carry (`#N` / `agentic-engineering#N` /
+`automated-researcher#N`) into `antondelafuente/<repo>#N`, per AGENTS.md's "Cross-repo references" rule —
+a same-repo bare ref becomes exactly the hazard that rule describes the moment it's copied into a different
+repo. It also ensures the target's `AGENTS.md` carries the `<!-- CODEX-REVIEW-GUIDANCE:BEGIN/END -->` block
+`review-on-pr.yml` reads its P0/P1 severity convention from (failing loudly instead of silently accepting an
+existing block that's missing one of its two markers). With `--repo` plus the three optional flags, it also
+creates the four labels above, applies this repo's own branch-protection ruleset, and turns on "Allow
+auto-merge" via `gh api`.
 
-What it deliberately does **not** do — no GitHub API can create an App non-interactively: creating the two
-GitHub Apps (author + reviewer; permissions: Contents read/write, Pull requests read/write, Issues
-read/write — see "Engineer identities" above) and provisioning the six Actions secrets (`CLAUDE_APP_ID`,
-`CLAUDE_APP_PRIVATE_KEY`, `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)
+`reconcile-prs.yml` (the reconciler) is always installed alongside the other four workflows: without it, a
+PR that goes `CONFLICTING`, or whose review-round auto-dispatch mention silently fails to post, never gets
+another pipeline event (`pull_request` never re-fires against an unmergeable PR — see that workflow's own
+header comment). Its conflict-nudge and mergeable-re-review legs need only the two Apps this script already
+requires (the `CLAUDE_APP` App additionally needs `Actions: write`, so it can `workflow_dispatch`
+`review-on-pr.yml`/`senior-engineer.yml`); only its round-limit/stranded-label paths call out to
+`senior-engineer.yml`, and degrade to a harmless logged warning (never a crash) when that leg isn't
+installed. `--senior-engineer-slug` additionally installs the senior-engineer leg (in-flight PR
+adjudication, `senior-engineer.yml` + its prompt): without it, review-on-pr.yml's round-limit and
+reconcile-prs.yml's own escalations still apply `needs-senior-engineer`, but nothing consumes it — the same
+graceful "label lands, nothing handles it yet" state this repo's own pipeline is in before
+`SENIOR_ENGINEER_APP_ID`/`SENIOR_ENGINEER_APP_PRIVATE_KEY` are provisioned (see AGENTS.md's "Senior-engineer
+leg"), not a self-hosting-specific defect; a human clears it per AGENTS.md's Dispatcher playbook until the
+leg is installed and configured.
+
+What it deliberately does **not** do — no GitHub API can create an App non-interactively: creating the
+GitHub Apps (author, reviewer, and optionally the senior-engineer adjudicator; permissions — see "Engineer
+identities" above and the script's own printed checklist) and provisioning the six-or-eight Actions secrets
+(`CLAUDE_APP_ID`, `CLAUDE_APP_PRIVATE_KEY`, `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, plus `SENIOR_ENGINEER_APP_ID`/`SENIOR_ENGINEER_APP_PRIVATE_KEY` if that leg is installed)
 from their real values. The script prints the exact remaining checklist at the end of its run.
 
 One asset-coupling gap the script's copy step resolves at the source rather than by including more files:
@@ -205,10 +227,25 @@ plugin itself, has neither. The checker now no-ops that validation (passes 1 and
 verified by `.aar-ci/skill_consistency_check_smoke.sh`'s no-plugins-tree scenario, and by running the
 templated output's own `.aar-ci/checks.sh` against a throwaway fresh repo.
 
+**Known limitation, not resolved by this script:** `checks.sh` also carries two OTHER path-gated checks
+that are inline in the script itself (not a separate, patchable helper like `skill_consistency_check.sh`)
+and stay coupled to this repo's own `aar-engineering` plugin/marketplace/disposition-triage product: it
+fails any target-repo PR that edits its own `AGENTS.md` (the packaged-disposition-reference sync check
+expects a `<!-- DISPOSITIONS:START/END -->` block and a
+`plugins/aar-engineering/skills/ship-change/references/DISPOSITIONS.md` neither a self-hosted target has
+nor needs), and any PR that edits its own `README.md` (the install-namespace check expects a
+`.claude-plugin/marketplace.json`). Faking that plugin/marketplace scaffolding into every target repo just
+to satisfy checks that are about a product it isn't adopting would be worse than the gap itself; trimming
+those two checks out of the copied `checks.sh` for self-hosted targets is a real fix but touches this repo's
+own trusted required-check bundle, a deliberate human decision, not one an automated pipeline run makes on
+its own.
+
 What was actually verified (this repo, not a second live GitHub install — creating a second live repo,
 Apps, and secrets is outside what an automated implementation run does on its own authority): the script
 run against a fresh local git checkout produces valid YAML, every identity string substituted with none of
-this repo's own left over, and the templated `.aar-ci/checks.sh` + its skill-consistency smoke both pass
-clean against the result. The remaining acceptance bar — flip `ready` on a real fresh repo and get a merged
-PR — needs the Apps/secrets/branch-protection above in place first; treat this repository's own
-configuration as the reference implementation for what "working" looks like end-to-end.
+this repo's own left over, cross-repo references qualified, and the templated `.aar-ci/checks.sh` +
+`.github/scripts/canonical_login_smoke.sh` + the skill-consistency smoke all pass clean against the result
+(outside the two known-limitation checks above, which only trigger on a future AGENTS.md/README.md edit,
+not on the bootstrap's own initial commit). The remaining acceptance bar — flip `ready` on a real fresh repo
+and get a merged PR — needs the Apps/secrets/branch-protection above in place first; treat this
+repository's own configuration as the reference implementation for what "working" looks like end-to-end.
