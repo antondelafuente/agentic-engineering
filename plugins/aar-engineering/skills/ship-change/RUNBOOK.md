@@ -192,7 +192,9 @@ reference the copied files' provenance comments carry (`#N` / `agentic-engineeri
 a same-repo bare ref becomes exactly the hazard that rule describes the moment it's copied into a different
 repo. It also ensures the target's `AGENTS.md` carries the `<!-- CODEX-REVIEW-GUIDANCE:BEGIN/END -->` block
 `review-on-pr.yml` reads its P0/P1 severity convention from (failing loudly instead of silently accepting an
-existing block that's missing one of its two markers). With `--repo` plus the three optional flags, it also
+existing block that's missing, duplicates, or reverses either of its two markers). Only a `--target-dir`
+that resolves to a checkout's actual root is accepted — a subdirectory is rejected, since every asset path
+this script writes is relative to that root. With `--repo` plus the three optional flags, it also
 creates the four labels above, applies this repo's own branch-protection ruleset, and turns on "Allow
 auto-merge" via `gh api`.
 
@@ -230,22 +232,29 @@ templated output's own `.aar-ci/checks.sh` against a throwaway fresh repo.
 **Known limitation, not resolved by this script:** `checks.sh` also carries two OTHER path-gated checks
 that are inline in the script itself (not a separate, patchable helper like `skill_consistency_check.sh`)
 and stay coupled to this repo's own `aar-engineering` plugin/marketplace/disposition-triage product: it
-fails any target-repo PR that edits its own `AGENTS.md` (the packaged-disposition-reference sync check
-expects a `<!-- DISPOSITIONS:START/END -->` block and a
+fails any run of `checks.sh` given `AGENTS.md` as a changed path (the packaged-disposition-reference sync
+check expects a `<!-- DISPOSITIONS:START/END -->` block and a
 `plugins/aar-engineering/skills/ship-change/references/DISPOSITIONS.md` neither a self-hosted target has
-nor needs), and any PR that edits its own `README.md` (the install-namespace check expects a
-`.claude-plugin/marketplace.json`). Faking that plugin/marketplace scaffolding into every target repo just
-to satisfy checks that are about a product it isn't adopting would be worse than the gap itself; trimming
-those two checks out of the copied `checks.sh` for self-hosted targets is a real fix but touches this repo's
-own trusted required-check bundle, a deliberate human decision, not one an automated pipeline run makes on
-its own.
+nor needs), and any run given `README.md` as a changed path (the install-namespace check expects a
+`.claude-plugin/marketplace.json`). This isn't limited to a target's *future* edits to those files — this
+script's own initial commit always writes/appends `AGENTS.md`, so if that commit is ever checked with the
+copied `checks.sh` (e.g. run by hand, or landed via a PR after `checks` is already a required status check)
+it fails the same way (verified below). Faking that plugin/marketplace scaffolding into every target repo
+just to satisfy checks that are about a product it isn't adopting would be worse than the gap itself;
+trimming those two checks out of the copied `checks.sh` for self-hosted targets is a real fix but touches
+this repo's own trusted required-check bundle, a deliberate human decision, not one an automated pipeline
+run makes on its own. Until that decision is made, land this script's own output on a self-hosted target's
+`main` directly (before `checks` becomes a required status check via `--branch-protection`), the same order
+the printed checklist already implies.
 
 What was actually verified (this repo, not a second live GitHub install — creating a second live repo,
 Apps, and secrets is outside what an automated implementation run does on its own authority): the script
 run against a fresh local git checkout produces valid YAML, every identity string substituted with none of
-this repo's own left over, cross-repo references qualified, and the templated `.aar-ci/checks.sh` +
-`.github/scripts/canonical_login_smoke.sh` + the skill-consistency smoke all pass clean against the result
-(outside the two known-limitation checks above, which only trigger on a future AGENTS.md/README.md edit,
-not on the bootstrap's own initial commit). The remaining acceptance bar — flip `ready` on a real fresh repo
-and get a merged PR — needs the Apps/secrets/branch-protection above in place first; treat this
-repository's own configuration as the reference implementation for what "working" looks like end-to-end.
+this repo's own left over, cross-repo references qualified (including bare `#N` refs, not just
+`repo#N`/`owner/repo#N` forms), and the templated `.aar-ci/checks.sh` + `.github/scripts/canonical_login_smoke.sh`
++ the skill-consistency smoke all pass clean against the result when run over those templated files' own
+paths. Running the templated `.aar-ci/checks.sh` given `AGENTS.md` as the changed path reproduces the known
+limitation above (`disposition reference / gate-label sync check failed`), confirming it isn't hypothetical.
+The remaining acceptance bar — flip `ready` on a real fresh repo and get a merged PR — needs the
+Apps/secrets/branch-protection above in place first; treat this repository's own configuration as the
+reference implementation for what "working" looks like end-to-end.

@@ -128,6 +128,17 @@ if ! git -C "$TARGET_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "--target-dir '$TARGET_DIR' is not a git work tree (git rev-parse --is-inside-work-tree failed)" >&2
   exit 1
 fi
+# --is-inside-work-tree is true from any subdirectory of a checkout, not just its root -- every relative
+# `$rel` path this script writes (`.github/workflows/...`, `AGENTS.md`, etc.) is meant to land at the
+# checkout's root, so a --target-dir that's actually a nested subdirectory would install assets one or more
+# levels below where the workflows/AGENTS.md are expected to live (agentic-engineering#73 review, round 2).
+# `pwd -P` on both sides resolves symlinks/relative segments so the comparison isn't fooled by a
+# differently-spelled but identical path.
+TARGET_TOPLEVEL=$(git -C "$TARGET_DIR" rev-parse --show-toplevel)
+if [ "$(cd "$TARGET_DIR" && pwd -P)" != "$(cd "$TARGET_TOPLEVEL" && pwd -P)" ]; then
+  echo "--target-dir '$TARGET_DIR' is a subdirectory of a git work tree, not its root ('$TARGET_TOPLEVEL') -- pass the checkout's top-level directory" >&2
+  exit 1
+fi
 
 echo "[bootstrap] source: $SOURCE_ROOT" >&2
 echo "[bootstrap] target: $TARGET_DIR" >&2
@@ -137,19 +148,23 @@ echo "[bootstrap] target: $TARGET_DIR" >&2
 # `automated-researcher#438`) that are correct only in THIS repo's own rendering context. Copied verbatim
 # into a different repo, a bare/repo-only ref either silently resolves against the TARGET repo's own issue
 # tracker or just reads as inert, confusing text — precisely the hazard AGENTS.md's "Cross-repo references"
-# section already names for any port between repos. Qualifying every `agentic-engineering#N` /
-# `automated-researcher#N` occurrence with `antondelafuente/` keeps these as what they actually are:
-# provenance citations into the real upstream repos, not the caller's own tracker. Already-qualified
-# `antondelafuente/agentic-engineering#N` / `antondelafuente/automated-researcher#N` forms are protected
-# through a placeholder round-trip so they're never double-prefixed. `|` is the sed delimiter throughout
-# since the patterns themselves contain `#`.
+# section already names for any port between repos (that section names the bare `#N` form itself as the
+# hazard, not just the `repo#N` form — round 1 of this PR's own review only qualified the latter). Every
+# remaining bare `#N` in a file that lives in THIS repo cites one of THIS repo's own issues, so it qualifies
+# to `antondelafuente/agentic-engineering#N`. Already-`repo#N`-qualified and already fully-qualified
+# `antondelafuente/...#N` forms are protected through a placeholder round-trip first, so the bare-ref rule
+# never re-matches (and re-prefixes) a ref another rule already qualified. `|` is the sed delimiter
+# throughout since the patterns themselves contain `#`.
 REF_QUALIFY_SED=(
   -e 's|antondelafuente/agentic-engineering#|@@AEQ_PLACEHOLDER@@|g'
   -e 's|antondelafuente/automated-researcher#|@@ARQ_PLACEHOLDER@@|g'
-  -e 's|agentic-engineering#|antondelafuente/agentic-engineering#|g'
-  -e 's|automated-researcher#|antondelafuente/automated-researcher#|g'
+  -e 's|agentic-engineering#|@@AE_PLACEHOLDER@@|g'
+  -e 's|automated-researcher#|@@AR_PLACEHOLDER@@|g'
+  -e 's|#([0-9]+)|antondelafuente/agentic-engineering#\1|g'
   -e 's|@@AEQ_PLACEHOLDER@@|antondelafuente/agentic-engineering#|g'
   -e 's|@@ARQ_PLACEHOLDER@@|antondelafuente/automated-researcher#|g'
+  -e 's|@@AE_PLACEHOLDER@@|antondelafuente/agentic-engineering#|g'
+  -e 's|@@AR_PLACEHOLDER@@|antondelafuente/automated-researcher#|g'
 )
 
 # Identity substitution for copy_templated files: every substitution below replaces a literal SUBSTRING
@@ -286,10 +301,21 @@ GUIDANCE=$(sed -n '/<!-- CODEX-REVIEW-GUIDANCE:BEGIN -->/,/<!-- CODEX-REVIEW-GUI
 [ -n "$GUIDANCE" ] || { echo "::error::could not extract CODEX-REVIEW-GUIDANCE markers from $SOURCE_ROOT/AGENTS.md" >&2; exit 1; }
 
 TARGET_AGENTS="$TARGET_DIR/AGENTS.md"
-HAS_BEGIN=0; HAS_END=0
+BEGIN_COUNT=0; END_COUNT=0
 if [ -f "$TARGET_AGENTS" ]; then
-  grep -q '<!-- CODEX-REVIEW-GUIDANCE:BEGIN -->' "$TARGET_AGENTS" && HAS_BEGIN=1
-  grep -q '<!-- CODEX-REVIEW-GUIDANCE:END -->' "$TARGET_AGENTS" && HAS_END=1
+  BEGIN_COUNT=$(grep -c '<!-- CODEX-REVIEW-GUIDANCE:BEGIN -->' "$TARGET_AGENTS" || true)
+  END_COUNT=$(grep -c '<!-- CODEX-REVIEW-GUIDANCE:END -->' "$TARGET_AGENTS" || true)
+fi
+
+# A block only counts as well-formed with exactly one of each marker, BEGIN strictly before END --
+# duplicate markers or a reversed BEGIN/END pair would make review-on-pr.yml's
+# `sed -n '/BEGIN/,/END/p'` extraction silently grab the wrong span instead of the intended guidance
+# (agentic-engineering#73 review, round 2: the round-1 fix only checked marker presence, not count/order).
+BLOCK_OK=0
+if [ "$BEGIN_COUNT" = 1 ] && [ "$END_COUNT" = 1 ]; then
+  BEGIN_LINE=$(grep -n '<!-- CODEX-REVIEW-GUIDANCE:BEGIN -->' "$TARGET_AGENTS" | cut -d: -f1)
+  END_LINE=$(grep -n '<!-- CODEX-REVIEW-GUIDANCE:END -->' "$TARGET_AGENTS" | cut -d: -f1)
+  [ "$BEGIN_LINE" -lt "$END_LINE" ] && BLOCK_OK=1
 fi
 
 if [ ! -f "$TARGET_AGENTS" ]; then
@@ -303,17 +329,9 @@ if [ ! -f "$TARGET_AGENTS" ]; then
     printf '%s\n' "$GUIDANCE"
   } > "$TARGET_AGENTS"
   echo "[bootstrap] wrote AGENTS.md (new, with CODEX-REVIEW-GUIDANCE block)" >&2
-elif [ "$HAS_BEGIN" = 1 ] && [ "$HAS_END" = 1 ]; then
-  echo "[bootstrap] AGENTS.md already carries a CODEX-REVIEW-GUIDANCE block — left untouched" >&2
-elif [ "$HAS_BEGIN" = 1 ] || [ "$HAS_END" = 1 ]; then
-  # An existing block missing one of its two markers is worse than none at all: review-on-pr.yml's
-  # `sed -n '/BEGIN/,/END/p'` extraction would silently produce empty/partial guidance (or hang open to
-  # end-of-file) instead of the clear "could not extract" failure a fully-missing block gets — every
-  # future review on the target would either misbehave or fail confusingly. Fail loudly instead of
-  # silently accepting or guessing which half to fix.
-  echo "::error::$TARGET_AGENTS carries an INCOMPLETE CODEX-REVIEW-GUIDANCE block (only one of the BEGIN/END markers is present) -- fix or remove it by hand before re-running this script" >&2
-  exit 1
-else
+elif [ "$BLOCK_OK" = 1 ]; then
+  echo "[bootstrap] AGENTS.md already carries a well-formed CODEX-REVIEW-GUIDANCE block — left untouched" >&2
+elif [ "$BEGIN_COUNT" = 0 ] && [ "$END_COUNT" = 0 ]; then
   {
     echo
     echo "## Codex review guidance (P0/P1 convention)"
@@ -323,6 +341,14 @@ else
     printf '%s\n' "$GUIDANCE"
   } >> "$TARGET_AGENTS"
   echo "[bootstrap] appended CODEX-REVIEW-GUIDANCE block to existing AGENTS.md" >&2
+else
+  # Anything short of "exactly one BEGIN, one END, BEGIN before END" is worse than no block at all:
+  # review-on-pr.yml's `sed -n '/BEGIN/,/END/p'` extraction would silently grab an empty/partial/wrong
+  # span (missing marker, duplicate markers, or END-before-BEGIN all confuse that same range extraction)
+  # instead of the clear "could not extract" failure a fully-missing block gets. Fail loudly instead of
+  # silently accepting or guessing which part to fix.
+  echo "::error::$TARGET_AGENTS carries a MALFORMED CODEX-REVIEW-GUIDANCE block (found $BEGIN_COUNT BEGIN marker(s), $END_COUNT END marker(s); need exactly one of each with BEGIN before END) -- fix or remove it by hand before re-running this script" >&2
+  exit 1
 fi
 
 if [ "$DO_LABELS" = 1 ] || [ "$DO_BRANCH_PROTECTION" = 1 ] || [ "$DO_AUTO_MERGE" = 1 ]; then
