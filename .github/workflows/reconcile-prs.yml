@@ -310,7 +310,7 @@ jobs:
             fi
 
             local comment_ts
-            if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s --argjson allow "$DISPATCHER_ACTIVITY_ALLOW" '
+            if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s -r --argjson allow "$DISPATCHER_ACTIVITY_ALLOW" '
               def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
               (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
                 | map(select(((.user.login | canon_login) as $c | ($allow | index($c)) != null)))
