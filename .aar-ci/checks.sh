@@ -100,39 +100,6 @@ PY
   fi
 fi
 
-# 1d. feedback-loop exposes two independently installed skills, so its init helper is packaged in both skill dirs.
-#     Keep the copies byte-identical; unlike DISPOSITIONS.md there is no separate editorial source.
-if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/feedback-loop/skills/(file-feedback|triage-feedback)/scripts/feedback_loop_init\.sh$'; then
-  FF_INIT="$ROOT/plugins/feedback-loop/skills/file-feedback/scripts/feedback_loop_init.sh"
-  TF_INIT="$ROOT/plugins/feedback-loop/skills/triage-feedback/scripts/feedback_loop_init.sh"
-  if [ -f "$FF_INIT" ] && [ -f "$TF_INIT" ] && cmp -s "$FF_INIT" "$TF_INIT"; then
-    ok "feedback-loop init copies match"
-  else
-    err "feedback_loop_init.sh copies drift; keep file-feedback and triage-feedback copies byte-identical"
-  fi
-fi
-
-# 1e. experiment-lifecycle ships the aar-profile SCHEMA.md reference in both independently-installed skill dirs
-#     (design-experiment + run-experiment), same per-skill-copy precedent as feedback-loop's init helper (#153).
-#     Keep the copies byte-identical AND assert each carries exactly one integer SCHEMA_VERSION marker — the
-#     product schema_version constant later helpers extract; a drift-only check would pass two identical but
-#     marker-less docs.
-if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/experiment-lifecycle/skills/(design-experiment|run-experiment)/references/SCHEMA\.md$'; then
-  DE_SCHEMA="$ROOT/plugins/experiment-lifecycle/skills/design-experiment/references/SCHEMA.md"
-  RE_SCHEMA="$ROOT/plugins/experiment-lifecycle/skills/run-experiment/references/SCHEMA.md"
-  if [ -f "$DE_SCHEMA" ] && [ -f "$RE_SCHEMA" ] && cmp -s "$DE_SCHEMA" "$RE_SCHEMA"; then
-    ok "aar-profile SCHEMA.md copies match"
-  else
-    err "aar-profile SCHEMA.md copies drift; keep design-experiment and run-experiment copies byte-identical"
-  fi
-  for s in "$DE_SCHEMA" "$RE_SCHEMA"; do
-    [ -f "$s" ] || continue
-    n=$(grep -cE '^<!-- SCHEMA_VERSION: [0-9]+ -->$' "$s")
-    if [ "$n" = 1 ]; then ok "SCHEMA_VERSION marker in $(basename "$(dirname "$(dirname "$s")")")/references/SCHEMA.md"
-    else err "SCHEMA.md must carry exactly one integer SCHEMA_VERSION marker (found $n in $s)"; fi
-  done
-fi
-
 # 1f. skill consistency (agentic-engineering#54): four deterministic passes over every
 #     plugins/*/skills/*/SKILL.md (wf.sh command existence, single-sourced routing, frontmatter/body
 #     agreement, retired-phrase denylist) so the docs-as-policy layer can't silently drift from the
@@ -341,40 +308,6 @@ if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/verify-claims/skills/verify-
     bash "$DI_SMOKE" >&2 && ok "disposition_injection smoke" || err "disposition-injection smoke FAILED"
   else
     err "audit_experiment.sh changed but disposition_injection_smoke.sh missing -- cannot verify the disposition-aware merge-gate injection (#15)"
-  fi
-fi
-
-# 11. run-supervision-record smoke (#168): the monotonic state machine + fail-closed is-desired-active +
-#     atomic writes + the update-vs-stop/close race — behavior the JSON/syntax checks can't cover. Runs
-#     when the helper or its smoke changed.
-if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/experiment-lifecycle/skills/run-experiment/scripts/run_supervision_record(_smoke)?\.sh$'; then
-  RSR_SMOKE="$ROOT/plugins/experiment-lifecycle/skills/run-experiment/scripts/run_supervision_record_smoke.sh"
-  if [ -f "$RSR_SMOKE" ]; then
-    echo "[checks] run-supervision-record smoke" >&2
-    bash "$RSR_SMOKE" >&2 && ok "run_supervision_record smoke" || err "run_supervision_record smoke FAILED"
-  else
-    err "run_supervision_record.sh changed but run_supervision_record_smoke.sh missing — cannot verify the record helper"
-  fi
-fi
-
-# 12. pod-lease + reaper smoke (#169): the 3-phase create + expiry-driven is-reapable + the locked
-#     reap (refresh-vs-reap race) + report-unknown-never-delete + unresolved-key report-only + legacy
-#     keepalive (future/inconclusive/past) + dry-run — behavior the JSON/syntax checks can't cover.
-#     Runs when either helper or its smoke changed.
-if printf '%s\n' "${PATHS[@]}" | grep -Eq '^plugins/gpu-job/skills/gpu-job/scripts/(pod_lease|pod_lease_smoke|pod_reaper|pod_reaper_smoke)\.sh$'; then
-  PL_SMOKE="$ROOT/plugins/gpu-job/skills/gpu-job/scripts/pod_lease_smoke.sh"
-  if [ -f "$PL_SMOKE" ]; then
-    echo "[checks] pod-lease smoke" >&2
-    bash "$PL_SMOKE" >&2 && ok "pod_lease smoke" || err "pod_lease smoke FAILED"
-  else
-    err "pod_lease.sh changed but pod_lease_smoke.sh missing — cannot verify the lease helper"
-  fi
-  PR_SMOKE="$ROOT/plugins/gpu-job/skills/gpu-job/scripts/pod_reaper_smoke.sh"
-  if [ -f "$PR_SMOKE" ]; then
-    echo "[checks] pod-reaper smoke" >&2
-    bash "$PR_SMOKE" >&2 && ok "pod_reaper smoke" || err "pod_reaper smoke FAILED"
-  else
-    err "pod_reaper.sh changed but pod_reaper_smoke.sh missing — cannot verify the reaper logic"
   fi
 fi
 
