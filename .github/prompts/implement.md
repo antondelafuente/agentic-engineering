@@ -32,10 +32,11 @@ will not see its findings in this run (post-review fixes ride a separate mention
 5. **If you are blocked, or if implementing the spec as written would contradict something the issue
    explicitly says, do NOT guess and do NOT implement a different thing than what's specified.** Instead:
    - If you have not yet opened a PR: comment on the issue explaining exactly what's blocking you or what
-     seems contradictory, add the `needs-dispatcher` label to the issue, and stop.
+     seems contradictory, and stop.
    - If you have already opened a PR and discover the block partway through: comment on the PR with the
-     same explanation, add `needs-dispatcher` to the PR, and stop. Do not force a partial/wrong
-     implementation just to have something to show.
+     same explanation and stop. Do not force a partial/wrong implementation just to have something to show
+     — if a review later disputes the same point, the pipeline's own round-limit escalates to
+     `needs-senior-engineer` for adjudication automatically; you don't need to self-escalate.
 6. Once the implementation is complete and checks pass locally, open a pull request:
    - Title derived from the issue title.
    - Body includes `Closes #{{ISSUE_NUMBER}}` (exact keyword, so the PR's merge closes the issue) plus a
@@ -43,7 +44,7 @@ will not see its findings in this run (post-review fixes ride a separate mention
    - Push the branch and open the PR using the GitHub token you were given — every git and `gh` operation
      you perform must run as that identity, never a different credential.
 7. Report your outcome as structured output: `pr_number` (the PR number you opened, or `null` if you
-   escalated to `needs-dispatcher` without opening one) and `status` (`opened` or `blocked`).
+   stopped per step 5 without opening one) and `status` (`opened` or `blocked`).
 
 ## Constraints
 
