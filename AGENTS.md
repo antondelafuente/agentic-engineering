@@ -302,11 +302,16 @@ Cross-repo issue/PR references are fully qualified (`owner/repo#N` or a full URL
 written — commits, PRs, docs, and chat — never a bare `#N`. A bare `#N` auto-links against whatever repo
 happens to be rendering it, not the repo the writer meant, and silently resolves to the wrong Issue or 404s.
 (This repo's own DISPOSITIONS block once carried exactly this failure — a `#49` meant for a different repo,
-fixed below.) A same-repo bare ref in `automated-researcher` becomes exactly this cross-repo hazard the
-moment it's copied into this repo unqualified — so every port/resync from `automated-researcher` must
-include a ref-qualification pass (prefixing every bare ref with `antondelafuente/`, including forms split
-across a line wrap) over the files it touched, before it's considered done; this class has re-imported
-itself on more than one sync already (agentic-engineering#65 rounds 4 and 7).
+fixed below.) **Scope: this rule governs references that cross a repo boundary** — a ref written in one
+repo pointing at another repo's Issue/PR, or any ref being copied between repos. A same-repo reference
+written from within this repo (this file's own repo-qualified `agentic-engineering#N` house form, or
+GitHub's `Closes #N` idiom in this repo's own commits and PR bodies — the pipeline flow above documents
+exactly that) is not cross-repo and is not what this rule prohibits. A same-repo bare ref in
+`automated-researcher` becomes exactly this cross-repo hazard the moment it's copied into this repo
+unqualified — so every port/resync from `automated-researcher` must include a ref-qualification pass
+(prefixing every bare ref with `antondelafuente/`, including forms split across a line wrap) over the files
+it touched, before it's considered done; this class has re-imported itself on more than one sync already
+(agentic-engineering#65 rounds 4 and 7).
 
 <!-- DISPOSITIONS:START -->
 ## Issue tracker — dispositions
