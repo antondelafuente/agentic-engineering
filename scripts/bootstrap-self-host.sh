@@ -423,7 +423,7 @@ fi
 if [ "$DO_LABELS" = 1 ]; then
   gh label create ready --repo "$REPO" --color 0e8a16 --description "Dispatch implement-on-ready.yml for this issue" --force
   gh label create needs-human --repo "$REPO" --color d93f0b --description "Escalation: needs a human/dispatcher" --force
-  gh label create needs-dispatcher --repo "$REPO" --color d93f0b --description "Implementor self-escalation: blocked or contradicted spec" --force
+  gh label create needs-dispatcher --repo "$REPO" --color d93f0b --description "Legacy, human-applied escalation (dispatcher era)" --force
   gh label create needs-senior-engineer --repo "$REPO" --color fbca04 --description "Summons in-flight PR adjudication (round-limit / conflict-stagnation / help request)" --force
   echo "[bootstrap] labels ready + needs-human + needs-dispatcher + needs-senior-engineer created/updated on $REPO" >&2
 fi

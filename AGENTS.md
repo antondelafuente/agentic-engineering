@@ -230,11 +230,17 @@ itself, ships by labeling an Issue `ready`.
   otherwise deadlock the PR forever exactly the way a stranded `needs-senior-engineer` used to
   (agentic-engineering#73: a round-3 self-escalation on a disputed P0 stood every leg down until a
   researcher-side session hand-summoned `senior-engineer.yml` 26 minutes later). Reusing the same
-  grace-window idiom rather than a parallel mechanism, once `needs-dispatcher`'s `labeled` event is older
-  than `SENIOR_ENGINEER_GRACE_SECONDS` with no newer activity, the sweep swaps it for `needs-senior-engineer`
-  and summons the adjudicator (`summoned_by=reconciler`) — the empirically proven right consumer for a stuck
-  implementor escalation. A subsequent tick then falls through to the `needs-senior-engineer` recovery model
-  above like any other summons.
+  grace-window idiom rather than a parallel mechanism, once the later of `needs-dispatcher`'s `labeled`
+  event and the PR's latest comment (a human reply is evidence the block is already being worked, same as a
+  newer adjudication comment extends the `needs-senior-engineer` grace window above) is older than
+  `SENIOR_ENGINEER_GRACE_SECONDS`, the sweep swaps the label for `needs-senior-engineer`. Whether it also
+  explicitly dispatches `senior-engineer.yml` (`summoned_by=reconciler`) depends on the PR's mergeability at
+  swap time: only a `CONFLICTING` PR has no buildable merge ref for the label swap's own `labeled` event to
+  fire against, so only there is the explicit dispatch load-bearing — on any other state that event already
+  summons the adjudicator on its own, and an explicit dispatch too would queue a second run behind it
+  (`senior-engineer.yml`'s concurrency group queues rather than cancels), double-running one summons. A
+  subsequent tick then falls through to the `needs-senior-engineer` recovery model above like any other
+  summons.
 - **Round-limit escalation now summons the senior engineer, not a human directly
   (agentic-engineering#63):** `review-on-pr.yml`'s submit-verdict job auto-dispatches an addressing round
   on every `REQUEST_CHANGES` verdict (the allowlisted `@claude-code-engineer` mention, gated on the same
