@@ -11,6 +11,8 @@
 #   - an unmarked retired phrase fails pass 4
 #   - a duplicated routing anchor only WARNs (pass 2 never fails)
 #   - a concrete-argument wf.sh example (no placeholders) passes pass 1
+#   - a tree with no plugins/ directory at all (a self-hosted install that only took the workflows +
+#     .aar-ci/, agentic-engineering#61) passes, instead of hard-failing on missing wf.sh
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -22,13 +24,18 @@ TMP=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
 trap 'rm -rf "$TMP"' EXIT
 fails=0
 
-# fixture <name> — a fresh copy of the real plugins/ tree under $TMP/<name>/plugins; prints its root.
+# fixture <name> — a fresh copy of the real plugins/ tree (if this install has one) under
+# $TMP/<name>/plugins; prints its root. A self-hosted install that only took the workflows + .aar-ci/
+# (agentic-engineering#61) has no plugins/ tree to copy — scenarios 2-6 below need real SKILL.md content
+# to inject a regression into and are skipped in that case (guarded by HAVE_PLUGINS), not this helper.
+HAVE_PLUGINS=0
+[ -d "$ROOT/plugins" ] && HAVE_PLUGINS=1
 fixture() {
   local name dir
   name=$1
   dir="$TMP/$name"
   mkdir -p "$dir"
-  cp -r "$ROOT/plugins" "$dir/plugins"
+  [ "$HAVE_PLUGINS" = 1 ] && cp -r "$ROOT/plugins" "$dir/plugins"
   echo "$dir"
 }
 
@@ -51,11 +58,12 @@ expect() {  # expect <PASS|FAIL> <name> <fixture-root> [grep-pattern-required-in
 BASE=$(fixture baseline)
 expect PASS baseline-real-tree "$BASE"
 
-# 2. agentic-engineering#51 round-3-style regression: a prescribed `wf.sh issue edit` (no such wf.sh
-#    verb) — pass 1.
-R3=$(fixture round3)
-SC="$R3/plugins/aar-engineering/skills/ship-change/SKILL.md"
-python3 - "$SC" <<'PY'
+if [ "$HAVE_PLUGINS" = 1 ]; then
+  # 2. agentic-engineering#51 round-3-style regression: a prescribed `wf.sh issue edit` (no such wf.sh
+  #    verb) — pass 1.
+  R3=$(fixture round3)
+  SC="$R3/plugins/aar-engineering/skills/ship-change/SKILL.md"
+  python3 - "$SC" <<'PY'
 import sys
 p = sys.argv[1]
 text = open(p, encoding="utf-8").read()
@@ -64,14 +72,14 @@ assert needle in text, "fixture setup: expected ship-change SKILL.md usage line 
 text = text.replace(needle, "wf.sh issue <claude|codex> edit -R <owner/repo>", 1)
 open(p, "w", encoding="utf-8").write(text)
 PY
-expect FAIL round3-wf-issue-edit "$R3" "pass1:.*wf.sh issue ... edit"
+  expect FAIL round3-wf-issue-edit "$R3" "pass1:.*wf.sh issue ... edit"
 
-# 3. agentic-engineering#51 round-8-style regression: an unqualified cloud-ship preference claim and a
-#    pipeline-first subordination claim both injected (self-contained — post-agentic-engineering#51 main
-#    no longer carries an ambient unqualified claim on its own) so the two disagree — pass 3.
-R8=$(fixture round8)
-SC8="$R8/plugins/aar-engineering/skills/ship-change/SKILL.md"
-python3 - "$SC8" <<'PY'
+  # 3. agentic-engineering#51 round-8-style regression: an unqualified cloud-ship preference claim and a
+  #    pipeline-first subordination claim both injected (self-contained — post-agentic-engineering#51 main
+  #    no longer carries an ambient unqualified claim on its own) so the two disagree — pass 3.
+  R8=$(fixture round8)
+  SC8="$R8/plugins/aar-engineering/skills/ship-change/SKILL.md"
+  python3 - "$SC8" <<'PY'
 import sys
 p = sys.argv[1]
 text = open(p, encoding="utf-8").read()
@@ -91,28 +99,37 @@ subordinate = (
 text = text.replace(marker, subordinate + marker, 1)
 open(p, "w", encoding="utf-8").write(text)
 PY
-expect FAIL round8-contradictory-frontmatter "$R8" "pass3:.*unqualified cloud-ship preference"
+  expect FAIL round8-contradictory-frontmatter "$R8" "pass3:.*unqualified cloud-ship preference"
 
-# 4. Retired-phrase denylist: an unmarked hit outside any LEGACY span — pass 4.
-P4=$(fixture pass4)
-VC="$P4/plugins/verify-claims/skills/verify-claims/SKILL.md"
-printf '\nThis paragraph reintroduces the retired dispatcher contract wording, unmarked.\n' >> "$VC"
-expect FAIL pass4-unmarked-retired-phrase "$P4" "pass4:.*retired phrase 'dispatcher contract'"
+  # 4. Retired-phrase denylist: an unmarked hit outside any LEGACY span — pass 4.
+  P4=$(fixture pass4)
+  VC="$P4/plugins/verify-claims/skills/verify-claims/SKILL.md"
+  printf '\nThis paragraph reintroduces the retired dispatcher contract wording, unmarked.\n' >> "$VC"
+  expect FAIL pass4-unmarked-retired-phrase "$P4" "pass4:.*retired phrase 'dispatcher contract'"
 
-# 5. Pass 2 is flag-only: two canonical anchors for the same routing concern must WARN, never fail the run.
-P2=$(fixture pass2)
-VC2="$P2/plugins/verify-claims/skills/verify-claims/SKILL.md"
-CS2="$P2/plugins/aar-engineering/skills/cloud-ship/SKILL.md"
-printf '\n<!-- ROUTING:fixture-concern -->\nThis paragraph states the fixture routing concern canonically.\n<!-- ROUTING-END:fixture-concern -->\n' >> "$VC2"
-printf '\n<!-- ROUTING:fixture-concern -->\nA second canonical statement of the fixture routing concern, which should only WARN.\n<!-- ROUTING-END:fixture-concern -->\n' >> "$CS2"
-expect PASS pass2-duplicate-anchor-flags-not-fails "$P2" "pass2: routing concern 'fixture-concern' has 2 canonical anchors"
+  # 5. Pass 2 is flag-only: two canonical anchors for the same routing concern must WARN, never fail the run.
+  P2=$(fixture pass2)
+  VC2="$P2/plugins/verify-claims/skills/verify-claims/SKILL.md"
+  CS2="$P2/plugins/aar-engineering/skills/cloud-ship/SKILL.md"
+  printf '\n<!-- ROUTING:fixture-concern -->\nThis paragraph states the fixture routing concern canonically.\n<!-- ROUTING-END:fixture-concern -->\n' >> "$VC2"
+  printf '\n<!-- ROUTING:fixture-concern -->\nA second canonical statement of the fixture routing concern, which should only WARN.\n<!-- ROUTING-END:fixture-concern -->\n' >> "$CS2"
+  expect PASS pass2-duplicate-anchor-flags-not-fails "$P2" "pass2: routing concern 'fixture-concern' has 2 canonical anchors"
 
-# 6. A concrete-argument `wf.sh issue codex create` example (family + real sub-verb, no placeholders)
-#    must pass pass 1 — the sub-verb is the token AFTER the family token, not "the first non-placeholder
-#    token" (which would misread `codex` itself as the sub-verb).
-P15=$(fixture pass15)
-SC15="$P15/plugins/aar-engineering/skills/ship-change/SKILL.md"
-printf '\nFor example: `wf.sh issue codex create -R owner/repo -t "..." -b "..."`.\n' >> "$SC15"
-expect PASS pass1-concrete-wf-issue-codex-create "$P15"
+  # 6. A concrete-argument `wf.sh issue codex create` example (family + real sub-verb, no placeholders)
+  #    must pass pass 1 — the sub-verb is the token AFTER the family token, not "the first non-placeholder
+  #    token" (which would misread `codex` itself as the sub-verb).
+  P15=$(fixture pass15)
+  SC15="$P15/plugins/aar-engineering/skills/ship-change/SKILL.md"
+  printf '\nFor example: `wf.sh issue codex create -R owner/repo -t "..." -b "..."`.\n' >> "$SC15"
+  expect PASS pass1-concrete-wf-issue-codex-create "$P15"
+else
+  echo "skip scenarios 2-6: no plugins/ tree in this install (agentic-engineering#61 self-host bootstrap) — nothing to inject a regression into"
+fi
+
+# 7. No plugins/ tree at all (agentic-engineering#61 self-host bootstrap: workflows + .aar-ci/ only, no
+#    aar-engineering plugin/wf.sh) must PASS with a note, not hard-fail on the now-absent wf.sh.
+NOPLUG="$TMP/noplugins"
+mkdir -p "$NOPLUG"
+expect PASS no-plugins-tree-skips-wf-validation "$NOPLUG" "pass1: no plugins/\*/skills/\*/SKILL.md found"
 
 [ "$fails" = 0 ] && { echo "[skill_consistency_check_smoke] PASS"; exit 0; } || { echo "[skill_consistency_check_smoke] FAIL"; exit 1; }

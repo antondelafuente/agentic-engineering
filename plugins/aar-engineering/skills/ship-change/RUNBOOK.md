@@ -162,11 +162,53 @@ If a plugin manifest changed, after a revert/merge refresh installed plugins:
 
 agentic-engineering ships its own changes through this `ship-change` (self-hosted). From Phase 2 on, its `main`
 is branch-protected like any product repo. Self-hosting this pipeline on another repo takes more than
-installing the skills: the target repo also needs the pipeline's workflow assets and prompts copied in;
-the identity substitutions the workflows hard-code throughout (the allowlisted researcher account, the
-engineer Apps' slugs, and the git author used for commits) replaced with the new owner's own; the `ready`
-and `needs-human` labels created; two GitHub Apps installed with the documented permissions; the six Actions
+installing the skills, because the GitHub-native SWE pipeline (`implement-on-ready.yml` ->
+`review-on-pr.yml` -> `address-review.yml`, gated by `checks.yml`) is Actions/App infrastructure that lives
+outside any plugin: the target repo needs those workflow assets and prompts copied in; the identity
+substitutions the workflows hard-code throughout (the allowlisted researcher account, the two engineer
+Apps' slugs, and the git author used for commits) replaced with the new owner's own; the `ready` and
+`needs-human` labels created; two GitHub Apps installed with the documented permissions; the six Actions
 secrets provisioned; and branch protection on `main` set up alongside the repository's "Allow auto-merge"
-setting. A complete, tested install path for all of this is tracked in
-[agentic-engineering#61](https://github.com/antondelafuente/agentic-engineering/issues/61); until it lands,
-treat this repository's own configuration as the reference implementation.
+setting.
+
+**`scripts/bootstrap-self-host.sh`** (agentic-engineering#61) automates the parts of this that are pure file
+templating or plain API calls:
+
+```
+scripts/bootstrap-self-host.sh --target-dir <path-to-fresh-repo-checkout> \
+  --researcher-login <your-github-login> \
+  --claude-slug <claude-app-slug> --claude-bot-id <numeric-id> --codex-slug <codex-app-slug> \
+  [--repo <owner/name> --create-labels --branch-protection --enable-auto-merge]
+```
+
+It copies `implement-on-ready.yml` / `review-on-pr.yml` / `address-review.yml` / `checks.yml`,
+`.github/prompts/{implement,address-review}.md`, `.github/scripts/canonical-login.sh`, and `.aar-ci/*`
+into the target, substituting every hard-coded identity string for the ones supplied (verified by a
+built-in leftover check — the run fails loudly rather than silently shipping this repo's own researcher
+login or bot slugs into the target), and ensures the target's `AGENTS.md` carries the
+`<!-- CODEX-REVIEW-GUIDANCE:BEGIN/END -->` block `review-on-pr.yml` reads its P0/P1 severity convention
+from. With `--repo` plus the three optional flags, it also creates the `ready`/`needs-human` labels, applies
+this repo's own branch-protection ruleset, and turns on "Allow auto-merge" via `gh api`.
+
+What it deliberately does **not** do — no GitHub API can create an App non-interactively: creating the two
+GitHub Apps (author + reviewer; permissions: Contents read/write, Pull requests read/write, Issues
+read/write — see "Engineer identities" above) and provisioning the six Actions secrets (`CLAUDE_APP_ID`,
+`CLAUDE_APP_PRIVATE_KEY`, `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)
+from their real values. The script prints the exact remaining checklist at the end of its run.
+
+One asset-coupling gap the script's copy step resolves at the source rather than by including more files:
+`checks.sh` unconditionally runs `.aar-ci/skill_consistency_check.sh`, which validates every
+`plugins/*/skills/*/SKILL.md` against `plugins/aar-engineering/skills/ship-change/scripts/wf.sh` — a
+self-hosted install that (deliberately) takes only the pipeline's workflow assets, not the `aar-engineering`
+plugin itself, has neither. The checker now no-ops that validation (passes 1 and 4) when there is no
+`plugins/*/skills/*/SKILL.md` tree at all, instead of hard-failing on the now-absent `wf.sh`/denylist —
+verified by `.aar-ci/skill_consistency_check_smoke.sh`'s no-plugins-tree scenario, and by running the
+templated output's own `.aar-ci/checks.sh` against a throwaway fresh repo.
+
+What was actually verified (this repo, not a second live GitHub install — creating a second live repo,
+Apps, and secrets is outside what an automated implementation run does on its own authority): the script
+run against a fresh local git checkout produces valid YAML, every identity string substituted with none of
+this repo's own left over, and the templated `.aar-ci/checks.sh` + its skill-consistency smoke both pass
+clean against the result. The remaining acceptance bar — flip `ready` on a real fresh repo and get a merged
+PR — needs the Apps/secrets/branch-protection above in place first; treat this repository's own
+configuration as the reference implementation for what "working" looks like end-to-end.

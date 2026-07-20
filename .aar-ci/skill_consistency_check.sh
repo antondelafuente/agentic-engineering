@@ -152,6 +152,12 @@ if os.path.isfile(WF_PATH):
     if not fdispo_subverbs:
         err("pass1: could not extract wf.sh's 'fdispo' sub-verb allowlist — a wf.sh format change must break "
             "this check visibly, not silently disable it")
+elif not skill_files:
+    # agentic-engineering#61: a self-hosted install of the GitHub-native SWE pipeline (workflows +
+    # .aar-ci/) need not also ship the aar-engineering plugin/wf.sh — this checker's whole job is
+    # validating plugins/*/skills/*/SKILL.md docs against wf.sh, so with zero such docs present there is
+    # nothing for pass 1 to validate and requiring wf.sh anyway would hard-fail every such install.
+    note("pass1: no plugins/*/skills/*/SKILL.md found (no plugins/ tree shipped) — skipping wf.sh verb validation")
 else:
     err(f"pass1: wf.sh not found at {relpath(WF_PATH)} — cannot validate wf.sh verbs")
 
@@ -319,6 +325,10 @@ if os.path.isfile(DENYLIST_PATH):
         line = line.strip()
         if line and not line.startswith("#"):
             phrases.append(line)
+elif not skill_files:
+    # agentic-engineering#61: same no-op rationale as pass 1 above — nothing under plugins/ to check the
+    # denylist against, so a self-host install that skipped the aar-engineering plugin need not carry it.
+    note(f"pass4: retired-phrase denylist not found at {relpath(DENYLIST_PATH)} and no plugins/*/skills/*/SKILL.md found — skipping")
 else:
     err(f"pass4: retired-phrase denylist not found at {relpath(DENYLIST_PATH)}")
 
