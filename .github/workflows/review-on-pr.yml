@@ -236,17 +236,28 @@ jobs:
           # comment authored by the trusted identities is recognized under either login form the API uses.
           # --paginate emits one JSON array per page; `jq -s add` slurps and flattens them into one array
           # regardless of page count.
-          reviews=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s --argjson allow "$REVIEW_ALLOW" '
+          # A GitHub API degradation returns an error OBJECT instead of a paginate array; `add` would
+          # object-merge it past a bare `// []` guard. Detect the non-array shape explicitly and fail
+          # this run closed rather than crash on an incidental type error or silently misbehave.
+          if ! reviews=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s --argjson allow "$REVIEW_ALLOW" '
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-            add // [] | map(select((.body // "") != "" and ((.user.login | canon_login) as $c | ($allow | index($c)) != null)))
+            (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+              | map(select((.body // "") != "" and ((.user.login | canon_login) as $c | ($allow | index($c)) != null)))
               | map({ts: .submitted_at, kind: "review", user: .user.login, state, body})
-          ')
-          comments=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --argjson allow "$COMMENT_ALLOW" --argjson noise "$NOISE_PREFIXES" '
+          '); then
+            echo "::error::PR #$PR_NUMBER: fetching reviews failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
+          if ! comments=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --argjson allow "$COMMENT_ALLOW" --argjson noise "$NOISE_PREFIXES" '
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-            add // [] | map(select((.user.login | canon_login) as $c | ($allow | index($c)) != null))
+            (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+              | map(select((.user.login | canon_login) as $c | ($allow | index($c)) != null))
               | map(select(((.body // "") as $body | $noise | any(. as $prefix | $body | startswith($prefix))) | not))
               | map({ts: .created_at, kind: "comment", user: .user.login, state: null, body})
-          ')
+          '); then
+            echo "::error::PR #$PR_NUMBER: fetching comments failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
 
           # Consecutive-CHANGES_REQUESTED count for the round-limit escalation (agentic-engineering#53):
           # walk codex-engineer[bot]'s reviews newest-first and count while state stays CHANGES_REQUESTED,
