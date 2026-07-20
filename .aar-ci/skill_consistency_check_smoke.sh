@@ -13,6 +13,12 @@
 #   - a concrete-argument wf.sh example (no placeholders) passes pass 1
 #   - a tree with no plugins/ directory at all (a self-hosted install that only took the workflows +
 #     .aar-ci/, agentic-engineering#61) passes, instead of hard-failing on missing wf.sh
+#   - a tree with a target-owned plugins/*/skills/*/SKILL.md but no plugins/aar-engineering (a self-hosted
+#     install whose target added its OWN skill, agentic-engineering#73) also passes, skipping wf.sh/denylist
+#     validation while the plugin-agnostic passes still run over the target's own doc
+#   - with plugins/aar-engineering present, deleting wf.sh still FAILs pass 1 (protection retained)
+#   - with plugins/aar-engineering present, deleting RETIRED_PHRASES.txt still FAILs pass 4 (protection
+#     retained)
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -25,17 +31,23 @@ trap 'rm -rf "$TMP"' EXIT
 fails=0
 
 # fixture <name> — a fresh copy of the real plugins/ tree (if this install has one) under
-# $TMP/<name>/plugins; prints its root. A self-hosted install that only took the workflows + .aar-ci/
-# (agentic-engineering#61) has no plugins/ tree to copy — scenarios 2-6 below need real SKILL.md content
-# to inject a regression into and are skipped in that case (guarded by HAVE_PLUGINS), not this helper.
+# $TMP/<name>/plugins; prints its root. Gated on plugins/ existing at all (not HAVE_PLUGINS below), so a
+# target repo's own plugins/ tree still gets copied for the target-owned-skills scenario.
+# HAVE_PLUGINS separately tracks whether THIS repo's own ship-change/cloud-ship/verify-claims SKILL.md
+# content is present — scenarios 2-6 inject a regression into that specific known content and are skipped
+# (not this helper) when it's absent, e.g. a self-hosted install that only took the workflows + .aar-ci/
+# (agentic-engineering#61) or a target whose own plugins/ tree doesn't carry this repo's content.
 HAVE_PLUGINS=0
-[ -d "$ROOT/plugins" ] && HAVE_PLUGINS=1
+[ -f "$ROOT/plugins/aar-engineering/skills/ship-change/SKILL.md" ] \
+  && [ -f "$ROOT/plugins/aar-engineering/skills/cloud-ship/SKILL.md" ] \
+  && [ -f "$ROOT/plugins/verify-claims/skills/verify-claims/SKILL.md" ] \
+  && HAVE_PLUGINS=1
 fixture() {
   local name dir
   name=$1
   dir="$TMP/$name"
   mkdir -p "$dir"
-  [ "$HAVE_PLUGINS" = 1 ] && cp -r "$ROOT/plugins" "$dir/plugins"
+  [ -d "$ROOT/plugins" ] && cp -r "$ROOT/plugins" "$dir/plugins"
   echo "$dir"
 }
 
@@ -122,14 +134,35 @@ PY
   SC15="$P15/plugins/aar-engineering/skills/ship-change/SKILL.md"
   printf '\nFor example: `wf.sh issue codex create -R owner/repo -t "..." -b "..."`.\n' >> "$SC15"
   expect PASS pass1-concrete-wf-issue-codex-create "$P15"
+
+  # 8. wf.sh deleted but plugins/aar-engineering still present: must still FAIL pass 1 (agentic-engineering#73
+  #    — the gate is plugins/aar-engineering presence, not zero SKILL.md files, so this protection must
+  #    survive that change).
+  WFDEL=$(fixture wfdeleted)
+  rm -f "$WFDEL/plugins/aar-engineering/skills/ship-change/scripts/wf.sh"
+  expect FAIL wf-sh-deleted-still-fails "$WFDEL" "pass1:.*wf.sh not found"
+
+  # 9. RETIRED_PHRASES.txt deleted but plugins/aar-engineering still present: must still FAIL pass 4
+  #    (agentic-engineering#73 — same protection-retained rationale as scenario 8).
+  DLDEL=$(fixture denylistdeleted)
+  rm -f "$DLDEL/plugins/aar-engineering/RETIRED_PHRASES.txt"
+  expect FAIL denylist-deleted-still-fails "$DLDEL" "pass4:.*denylist not found"
 else
-  echo "skip scenarios 2-6: no plugins/ tree in this install (agentic-engineering#61 self-host bootstrap) — nothing to inject a regression into"
+  echo "skip scenarios 2-6, 8-9: this repo's own ship-change/cloud-ship/verify-claims SKILL.md content not present in this install — nothing of known shape to inject a regression into or delete from"
 fi
 
 # 7. No plugins/ tree at all (agentic-engineering#61 self-host bootstrap: workflows + .aar-ci/ only, no
 #    aar-engineering plugin/wf.sh) must PASS with a note, not hard-fail on the now-absent wf.sh.
 NOPLUG="$TMP/noplugins"
 mkdir -p "$NOPLUG"
-expect PASS no-plugins-tree-skips-wf-validation "$NOPLUG" "pass1: no plugins/\*/skills/\*/SKILL.md found"
+expect PASS no-plugins-tree-skips-wf-validation "$NOPLUG" "pass1: plugins/aar-engineering not present"
+
+# 10. A tree with a target-owned plugins/*/skills/*/SKILL.md but no plugins/aar-engineering at all (a
+#     self-hosted install whose target added its OWN skill, agentic-engineering#73) must also PASS,
+#     skipping wf.sh/denylist validation while still running the plugin-agnostic passes.
+TARGETOWNED="$TMP/targetowned"
+mkdir -p "$TARGETOWNED/plugins/otherplug/skills/hello"
+printf -- '---\nname: hello\ndescription: t\n---\n\n# hello\n' > "$TARGETOWNED/plugins/otherplug/skills/hello/SKILL.md"
+expect PASS target-owned-skills-skips-wf-validation "$TARGETOWNED" "pass1: plugins/aar-engineering not present"
 
 [ "$fails" = 0 ] && { echo "[skill_consistency_check_smoke] PASS"; exit 0; } || { echo "[skill_consistency_check_smoke] FAIL"; exit 1; }

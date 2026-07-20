@@ -224,10 +224,19 @@ One asset-coupling gap the script's copy step resolves at the source rather than
 `checks.sh` unconditionally runs `.aar-ci/skill_consistency_check.sh`, which validates every
 `plugins/*/skills/*/SKILL.md` against `plugins/aar-engineering/skills/ship-change/scripts/wf.sh` — a
 self-hosted install that (deliberately) takes only the pipeline's workflow assets, not the `aar-engineering`
-plugin itself, has neither. The checker now no-ops that validation (passes 1 and 4) when there is no
-`plugins/*/skills/*/SKILL.md` tree at all, instead of hard-failing on the now-absent `wf.sh`/denylist —
-verified by `.aar-ci/skill_consistency_check_smoke.sh`'s no-plugins-tree scenario, and by running the
-templated output's own `.aar-ci/checks.sh` against a throwaway fresh repo.
+plugin itself, has neither. The checker now no-ops that validation (passes 1 and 4) whenever
+`plugins/aar-engineering` itself isn't present, instead of hard-failing on the absent `wf.sh`/denylist — not
+whenever there happen to be zero `SKILL.md` files anywhere, which broke the moment a self-hosted target added
+its own unrelated skill (`plugins/otherplug/skills/hello/SKILL.md`): every plugin-agnostic pass (`scripts/`
+resolution, routing, frontmatter/body agreement) still runs over a target's own `SKILL.md` docs, and a
+`wf.sh <verb>` a target doc prescribes still correctly fails pass 1, since that tool genuinely isn't present.
+The target's copy of `.aar-ci/checks.sh` additionally guards its fake-HOME smoke's plugin-list computation on
+`.claude-plugin/marketplace.json` existing, so a target's own `plugins/` tree doesn't crash that smoke's
+fixture asserts before the target has adopted the marketplace product — the third existence guard alongside
+the two described below, same self-activation pattern. Verified by
+`.aar-ci/skill_consistency_check_smoke.sh`'s no-plugins-tree, target-owned-skills, wf-sh-deleted, and
+denylist-deleted scenarios, and by running the templated output's own `.aar-ci/checks.sh` against a throwaway
+fresh repo with a target-owned skill added.
 
 `checks.sh` also carries two OTHER path-gated checks that are inline in the script itself (not a separate,
 patchable helper like `skill_consistency_check.sh`) and stay coupled to this repo's own `aar-engineering`
@@ -259,7 +268,11 @@ this repo's own left over, cross-repo references qualified (including bare `#N` 
 + the skill-consistency smoke all pass clean against the result when run over those templated files' own
 paths. Running the templated `.aar-ci/checks.sh` given `AGENTS.md` as the changed path, and again given
 `README.md`, both now pass clean — confirming the existence guards above actually make the target's copy
-diverge from upstream only where upstream could never pass anyway.
+diverge from upstream only where upstream could never pass anyway. Also verified: bootstrapping a throwaway
+target, adding a target-owned `plugins/myplugin/skills/hello/SKILL.md`, and confirming
+`.aar-ci/skill_consistency_check.sh`, `.aar-ci/checks.sh` against that new file, and `.aar-ci/checks.sh`
+against `AGENTS.md`/`README.md` all now pass (they previously failed permanently once such a file existed,
+since check 1f runs the skill checker unconditionally on every invocation).
 The remaining acceptance bar — flip `ready` on a real fresh repo and get a merged PR — needs the
 Apps/secrets/branch-protection above in place first; treat this repository's own configuration as the
 reference implementation for what "working" looks like end-to-end.
