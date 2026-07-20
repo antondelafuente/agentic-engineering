@@ -11,6 +11,14 @@
 #   - an unmarked retired phrase fails pass 4
 #   - a duplicated routing anchor only WARNs (pass 2 never fails)
 #   - a concrete-argument wf.sh example (no placeholders) passes pass 1
+#   - a tree with no plugins/ directory at all (a self-hosted install that only took the workflows +
+#     .aar-ci/, agentic-engineering#61) passes, instead of hard-failing on missing wf.sh
+#   - a tree with a target-owned plugins/*/skills/*/SKILL.md but no plugins/aar-engineering (a self-hosted
+#     install whose target added its OWN skill, agentic-engineering#73) also passes, skipping wf.sh/denylist
+#     validation while the plugin-agnostic passes still run over the target's own doc
+#   - with plugins/aar-engineering present, deleting wf.sh still FAILs pass 1 (protection retained)
+#   - with plugins/aar-engineering present, deleting RETIRED_PHRASES.txt still FAILs pass 4 (protection
+#     retained)
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -22,13 +30,24 @@ TMP=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
 trap 'rm -rf "$TMP"' EXIT
 fails=0
 
-# fixture <name> — a fresh copy of the real plugins/ tree under $TMP/<name>/plugins; prints its root.
+# fixture <name> — a fresh copy of the real plugins/ tree (if this install has one) under
+# $TMP/<name>/plugins; prints its root. Gated on plugins/ existing at all (not HAVE_PLUGINS below), so a
+# target repo's own plugins/ tree still gets copied for the target-owned-skills scenario.
+# HAVE_PLUGINS separately tracks whether THIS repo's own ship-change/cloud-ship/verify-claims SKILL.md
+# content is present — scenarios 2-6 inject a regression into that specific known content and are skipped
+# (not this helper) when it's absent, e.g. a self-hosted install that only took the workflows + .aar-ci/
+# (agentic-engineering#61) or a target whose own plugins/ tree doesn't carry this repo's content.
+HAVE_PLUGINS=0
+[ -f "$ROOT/plugins/aar-engineering/skills/ship-change/SKILL.md" ] \
+  && [ -f "$ROOT/plugins/aar-engineering/skills/cloud-ship/SKILL.md" ] \
+  && [ -f "$ROOT/plugins/verify-claims/skills/verify-claims/SKILL.md" ] \
+  && HAVE_PLUGINS=1
 fixture() {
   local name dir
   name=$1
   dir="$TMP/$name"
   mkdir -p "$dir"
-  cp -r "$ROOT/plugins" "$dir/plugins"
+  [ -d "$ROOT/plugins" ] && cp -r "$ROOT/plugins" "$dir/plugins"
   echo "$dir"
 }
 
@@ -51,11 +70,12 @@ expect() {  # expect <PASS|FAIL> <name> <fixture-root> [grep-pattern-required-in
 BASE=$(fixture baseline)
 expect PASS baseline-real-tree "$BASE"
 
-# 2. agentic-engineering#51 round-3-style regression: a prescribed `wf.sh issue edit` (no such wf.sh
-#    verb) — pass 1.
-R3=$(fixture round3)
-SC="$R3/plugins/aar-engineering/skills/ship-change/SKILL.md"
-python3 - "$SC" <<'PY'
+if [ "$HAVE_PLUGINS" = 1 ]; then
+  # 2. agentic-engineering#51 round-3-style regression: a prescribed `wf.sh issue edit` (no such wf.sh
+  #    verb) — pass 1.
+  R3=$(fixture round3)
+  SC="$R3/plugins/aar-engineering/skills/ship-change/SKILL.md"
+  python3 - "$SC" <<'PY'
 import sys
 p = sys.argv[1]
 text = open(p, encoding="utf-8").read()
@@ -64,14 +84,14 @@ assert needle in text, "fixture setup: expected ship-change SKILL.md usage line 
 text = text.replace(needle, "wf.sh issue <claude|codex> edit -R <owner/repo>", 1)
 open(p, "w", encoding="utf-8").write(text)
 PY
-expect FAIL round3-wf-issue-edit "$R3" "pass1:.*wf.sh issue ... edit"
+  expect FAIL round3-wf-issue-edit "$R3" "pass1:.*wf.sh issue ... edit"
 
-# 3. agentic-engineering#51 round-8-style regression: an unqualified cloud-ship preference claim and a
-#    pipeline-first subordination claim both injected (self-contained — post-agentic-engineering#51 main
-#    no longer carries an ambient unqualified claim on its own) so the two disagree — pass 3.
-R8=$(fixture round8)
-SC8="$R8/plugins/aar-engineering/skills/ship-change/SKILL.md"
-python3 - "$SC8" <<'PY'
+  # 3. agentic-engineering#51 round-8-style regression: an unqualified cloud-ship preference claim and a
+  #    pipeline-first subordination claim both injected (self-contained — post-agentic-engineering#51 main
+  #    no longer carries an ambient unqualified claim on its own) so the two disagree — pass 3.
+  R8=$(fixture round8)
+  SC8="$R8/plugins/aar-engineering/skills/ship-change/SKILL.md"
+  python3 - "$SC8" <<'PY'
 import sys
 p = sys.argv[1]
 text = open(p, encoding="utf-8").read()
@@ -91,28 +111,58 @@ subordinate = (
 text = text.replace(marker, subordinate + marker, 1)
 open(p, "w", encoding="utf-8").write(text)
 PY
-expect FAIL round8-contradictory-frontmatter "$R8" "pass3:.*unqualified cloud-ship preference"
+  expect FAIL round8-contradictory-frontmatter "$R8" "pass3:.*unqualified cloud-ship preference"
 
-# 4. Retired-phrase denylist: an unmarked hit outside any LEGACY span — pass 4.
-P4=$(fixture pass4)
-VC="$P4/plugins/verify-claims/skills/verify-claims/SKILL.md"
-printf '\nThis paragraph reintroduces the retired dispatcher contract wording, unmarked.\n' >> "$VC"
-expect FAIL pass4-unmarked-retired-phrase "$P4" "pass4:.*retired phrase 'dispatcher contract'"
+  # 4. Retired-phrase denylist: an unmarked hit outside any LEGACY span — pass 4.
+  P4=$(fixture pass4)
+  VC="$P4/plugins/verify-claims/skills/verify-claims/SKILL.md"
+  printf '\nThis paragraph reintroduces the retired dispatcher contract wording, unmarked.\n' >> "$VC"
+  expect FAIL pass4-unmarked-retired-phrase "$P4" "pass4:.*retired phrase 'dispatcher contract'"
 
-# 5. Pass 2 is flag-only: two canonical anchors for the same routing concern must WARN, never fail the run.
-P2=$(fixture pass2)
-VC2="$P2/plugins/verify-claims/skills/verify-claims/SKILL.md"
-CS2="$P2/plugins/aar-engineering/skills/cloud-ship/SKILL.md"
-printf '\n<!-- ROUTING:fixture-concern -->\nThis paragraph states the fixture routing concern canonically.\n<!-- ROUTING-END:fixture-concern -->\n' >> "$VC2"
-printf '\n<!-- ROUTING:fixture-concern -->\nA second canonical statement of the fixture routing concern, which should only WARN.\n<!-- ROUTING-END:fixture-concern -->\n' >> "$CS2"
-expect PASS pass2-duplicate-anchor-flags-not-fails "$P2" "pass2: routing concern 'fixture-concern' has 2 canonical anchors"
+  # 5. Pass 2 is flag-only: two canonical anchors for the same routing concern must WARN, never fail the run.
+  P2=$(fixture pass2)
+  VC2="$P2/plugins/verify-claims/skills/verify-claims/SKILL.md"
+  CS2="$P2/plugins/aar-engineering/skills/cloud-ship/SKILL.md"
+  printf '\n<!-- ROUTING:fixture-concern -->\nThis paragraph states the fixture routing concern canonically.\n<!-- ROUTING-END:fixture-concern -->\n' >> "$VC2"
+  printf '\n<!-- ROUTING:fixture-concern -->\nA second canonical statement of the fixture routing concern, which should only WARN.\n<!-- ROUTING-END:fixture-concern -->\n' >> "$CS2"
+  expect PASS pass2-duplicate-anchor-flags-not-fails "$P2" "pass2: routing concern 'fixture-concern' has 2 canonical anchors"
 
-# 6. A concrete-argument `wf.sh issue codex create` example (family + real sub-verb, no placeholders)
-#    must pass pass 1 — the sub-verb is the token AFTER the family token, not "the first non-placeholder
-#    token" (which would misread `codex` itself as the sub-verb).
-P15=$(fixture pass15)
-SC15="$P15/plugins/aar-engineering/skills/ship-change/SKILL.md"
-printf '\nFor example: `wf.sh issue codex create -R owner/repo -t "..." -b "..."`.\n' >> "$SC15"
-expect PASS pass1-concrete-wf-issue-codex-create "$P15"
+  # 6. A concrete-argument `wf.sh issue codex create` example (family + real sub-verb, no placeholders)
+  #    must pass pass 1 — the sub-verb is the token AFTER the family token, not "the first non-placeholder
+  #    token" (which would misread `codex` itself as the sub-verb).
+  P15=$(fixture pass15)
+  SC15="$P15/plugins/aar-engineering/skills/ship-change/SKILL.md"
+  printf '\nFor example: `wf.sh issue codex create -R owner/repo -t "..." -b "..."`.\n' >> "$SC15"
+  expect PASS pass1-concrete-wf-issue-codex-create "$P15"
+
+  # 8. wf.sh deleted but plugins/aar-engineering still present: must still FAIL pass 1 (agentic-engineering#73
+  #    — the gate is plugins/aar-engineering presence, not zero SKILL.md files, so this protection must
+  #    survive that change).
+  WFDEL=$(fixture wfdeleted)
+  rm -f "$WFDEL/plugins/aar-engineering/skills/ship-change/scripts/wf.sh"
+  expect FAIL wf-sh-deleted-still-fails "$WFDEL" "pass1:.*wf.sh not found"
+
+  # 9. RETIRED_PHRASES.txt deleted but plugins/aar-engineering still present: must still FAIL pass 4
+  #    (agentic-engineering#73 — same protection-retained rationale as scenario 8).
+  DLDEL=$(fixture denylistdeleted)
+  rm -f "$DLDEL/plugins/aar-engineering/RETIRED_PHRASES.txt"
+  expect FAIL denylist-deleted-still-fails "$DLDEL" "pass4:.*denylist not found"
+else
+  echo "skip scenarios 2-6, 8-9: this repo's own ship-change/cloud-ship/verify-claims SKILL.md content not present in this install — nothing of known shape to inject a regression into or delete from"
+fi
+
+# 7. No plugins/ tree at all (agentic-engineering#61 self-host bootstrap: workflows + .aar-ci/ only, no
+#    aar-engineering plugin/wf.sh) must PASS with a note, not hard-fail on the now-absent wf.sh.
+NOPLUG="$TMP/noplugins"
+mkdir -p "$NOPLUG"
+expect PASS no-plugins-tree-skips-wf-validation "$NOPLUG" "pass1: plugins/aar-engineering not present"
+
+# 10. A tree with a target-owned plugins/*/skills/*/SKILL.md but no plugins/aar-engineering at all (a
+#     self-hosted install whose target added its OWN skill, agentic-engineering#73) must also PASS,
+#     skipping wf.sh/denylist validation while still running the plugin-agnostic passes.
+TARGETOWNED="$TMP/targetowned"
+mkdir -p "$TARGETOWNED/plugins/otherplug/skills/hello"
+printf -- '---\nname: hello\ndescription: t\n---\n\n# hello\n' > "$TARGETOWNED/plugins/otherplug/skills/hello/SKILL.md"
+expect PASS target-owned-skills-skips-wf-validation "$TARGETOWNED" "pass1: plugins/aar-engineering not present"
 
 [ "$fails" = 0 ] && { echo "[skill_consistency_check_smoke] PASS"; exit 0; } || { echo "[skill_consistency_check_smoke] FAIL"; exit 1; }

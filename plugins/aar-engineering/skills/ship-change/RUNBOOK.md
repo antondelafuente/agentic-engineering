@@ -162,11 +162,117 @@ If a plugin manifest changed, after a revert/merge refresh installed plugins:
 
 agentic-engineering ships its own changes through this `ship-change` (self-hosted). From Phase 2 on, its `main`
 is branch-protected like any product repo. Self-hosting this pipeline on another repo takes more than
-installing the skills: the target repo also needs the pipeline's workflow assets and prompts copied in;
-the identity substitutions the workflows hard-code throughout (the allowlisted researcher account, the
-engineer Apps' slugs, and the git author used for commits) replaced with the new owner's own; the `ready`
-and `needs-human` labels created; two GitHub Apps installed with the documented permissions; the six Actions
-secrets provisioned; and branch protection on `main` set up alongside the repository's "Allow auto-merge"
-setting. A complete, tested install path for all of this is tracked in
-[agentic-engineering#61](https://github.com/antondelafuente/agentic-engineering/issues/61); until it lands,
-treat this repository's own configuration as the reference implementation.
+installing the skills, because the GitHub-native SWE pipeline (`implement-on-ready.yml` ->
+`review-on-pr.yml` -> `address-review.yml` -> `reconcile-prs.yml`, gated by `checks.yml`) is Actions/App
+infrastructure that lives outside any plugin: the target repo needs those workflow assets and prompts
+copied in; the identity substitutions the workflows hard-code throughout (the allowlisted researcher
+account, the engineer Apps' slugs, and the git author used for commits) replaced with the new owner's own;
+the `ready`/`needs-human`/`needs-dispatcher`/`needs-senior-engineer` labels created; two GitHub Apps
+installed with the documented permissions; the six Actions secrets provisioned; and branch protection on
+`main` set up alongside the repository's "Allow auto-merge" setting.
+
+**`scripts/bootstrap-self-host.sh`** (agentic-engineering#61) automates the parts of this that are pure file
+templating or plain API calls:
+
+```
+scripts/bootstrap-self-host.sh --target-dir <path-to-fresh-repo-checkout> \
+  --researcher-login <your-github-login> \
+  --claude-slug <claude-app-slug> --claude-bot-id <numeric-id> --codex-slug <codex-app-slug> \
+  [--senior-engineer-slug <senior-engineer-app-slug>] \
+  [--repo <owner/name> --create-labels --branch-protection --enable-auto-merge]
+```
+
+It copies `implement-on-ready.yml` / `review-on-pr.yml` / `address-review.yml` / `reconcile-prs.yml` /
+`checks.yml`, `.github/prompts/{implement,address-review}.md`, `.github/scripts/canonical-login.sh` (+ its
+smoke), and `.aar-ci/*` into the target, substituting every hard-coded identity string for the ones
+supplied (verified by a built-in leftover check — the run fails loudly rather than silently shipping this
+repo's own researcher login or bot slugs into the target) and qualifying every bare/repo-only issue
+reference the copied files' provenance comments carry (`#N` / `agentic-engineering#N` /
+`automated-researcher#N`) into `antondelafuente/<repo>#N`, per AGENTS.md's "Cross-repo references" rule —
+a same-repo bare ref becomes exactly the hazard that rule describes the moment it's copied into a different
+repo. It also ensures the target's `AGENTS.md` carries the `<!-- CODEX-REVIEW-GUIDANCE:BEGIN/END -->` block
+`review-on-pr.yml` reads its P0/P1 severity convention from (failing loudly instead of silently accepting an
+existing block that's missing, duplicates, or reverses either of its two markers). Only a `--target-dir`
+that resolves to a checkout's actual root is accepted — a subdirectory is rejected, since every asset path
+this script writes is relative to that root. With `--repo` plus the three optional flags, it also
+creates the four labels above, applies this repo's own branch-protection ruleset, and turns on "Allow
+auto-merge" via `gh api`.
+
+`reconcile-prs.yml` (the reconciler) is always installed alongside the other four workflows: without it, a
+PR that goes `CONFLICTING`, or whose review-round auto-dispatch mention silently fails to post, never gets
+another pipeline event (`pull_request` never re-fires against an unmergeable PR — see that workflow's own
+header comment). Its conflict-nudge and mergeable-re-review legs need only the two Apps this script already
+requires (the `CLAUDE_APP` App additionally needs `Actions: write`, so it can `workflow_dispatch`
+`review-on-pr.yml`/`senior-engineer.yml`); only its round-limit/stranded-label paths call out to
+`senior-engineer.yml`, and degrade to a harmless logged warning (never a crash) when that leg isn't
+installed. `--senior-engineer-slug` additionally installs the senior-engineer leg (in-flight PR
+adjudication, `senior-engineer.yml` + its prompt): without it, review-on-pr.yml's round-limit and
+reconcile-prs.yml's own escalations still apply `needs-senior-engineer`, but nothing consumes it — the same
+graceful "label lands, nothing handles it yet" state this repo's own pipeline is in before
+`SENIOR_ENGINEER_APP_ID`/`SENIOR_ENGINEER_APP_PRIVATE_KEY` are provisioned (see AGENTS.md's "Senior-engineer
+leg"), not a self-hosting-specific defect; a human clears it per AGENTS.md's Dispatcher playbook until the
+leg is installed and configured.
+
+What it deliberately does **not** do — no GitHub API can create an App non-interactively: creating the
+GitHub Apps (author, reviewer, and optionally the senior-engineer adjudicator; permissions — see "Engineer
+identities" above and the script's own printed checklist) and provisioning the six-or-eight Actions secrets
+(`CLAUDE_APP_ID`, `CLAUDE_APP_PRIVATE_KEY`, `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, plus `SENIOR_ENGINEER_APP_ID`/`SENIOR_ENGINEER_APP_PRIVATE_KEY` if that leg is installed)
+from their real values. The script prints the exact remaining checklist at the end of its run.
+
+One asset-coupling gap the script's copy step resolves at the source rather than by including more files:
+`checks.sh` unconditionally runs `.aar-ci/skill_consistency_check.sh`, which validates every
+`plugins/*/skills/*/SKILL.md` against `plugins/aar-engineering/skills/ship-change/scripts/wf.sh` — a
+self-hosted install that (deliberately) takes only the pipeline's workflow assets, not the `aar-engineering`
+plugin itself, has neither. The checker now no-ops that validation (passes 1 and 4) whenever
+`plugins/aar-engineering` itself isn't present, instead of hard-failing on the absent `wf.sh`/denylist — not
+whenever there happen to be zero `SKILL.md` files anywhere, which broke the moment a self-hosted target added
+its own unrelated skill (`plugins/otherplug/skills/hello/SKILL.md`): every plugin-agnostic pass (`scripts/`
+resolution, routing, frontmatter/body agreement) still runs over a target's own `SKILL.md` docs, and a
+`wf.sh <verb>` a target doc prescribes still correctly fails pass 1, since that tool genuinely isn't present.
+The target's copy of `.aar-ci/checks.sh` additionally guards its fake-HOME smoke's plugin-list computation on
+`.claude-plugin/marketplace.json` existing, so a target's own `plugins/` tree doesn't crash that smoke's
+fixture asserts before the target has adopted the marketplace product — the third existence guard alongside
+the two described below, same self-activation pattern. Verified by
+`.aar-ci/skill_consistency_check_smoke.sh`'s no-plugins-tree, target-owned-skills, wf-sh-deleted, and
+denylist-deleted scenarios, and by running the templated output's own `.aar-ci/checks.sh` against a throwaway
+fresh repo with a target-owned skill added.
+
+`checks.sh` also carries two OTHER path-gated checks that are inline in the script itself (not a separate,
+patchable helper like `skill_consistency_check.sh`) and stay coupled to this repo's own `aar-engineering`
+plugin/marketplace/disposition-triage product: the packaged-disposition-reference sync check (given
+`AGENTS.md` as a changed path, expects a `<!-- DISPOSITIONS:START/END -->` block and a
+`plugins/aar-engineering/skills/ship-change/references/DISPOSITIONS.md`), and the install-namespace check
+(given `README.md` as a changed path, expects a `.claude-plugin/marketplace.json`). Neither file exists in a
+self-hosted target that hasn't adopted that product, so both checks would otherwise fail any ordinary
+target PR touching those paths — including this script's own initial commit, which always writes/appends
+`AGENTS.md`.
+
+The script resolves this at the source: after copying `.aar-ci/checks.sh` verbatim, it post-processes only
+the target's copy, prepending an existence guard for the product file each check actually depends on (`[ -f
+"$ROOT/.claude-plugin/marketplace.json" ] &&` / `[ -f
+"$ROOT/plugins/aar-engineering/skills/ship-change/references/DISPOSITIONS.md" ] &&` in front of the check's
+own path-match condition). Both checks self-activate automatically if the target later adopts the
+marketplace/dispositions product; until then they're unreachable, since the file they guard on doesn't
+exist. The anchors are matched as fixed strings and asserted to occur exactly once each, so a future edit to
+`checks.sh`'s own gate lines that moves them fails this script loudly instead of silently shipping an
+unguarded copy. This transforms only the bytes written into `--target-dir`; this repo's own
+`.aar-ci/checks.sh` (a restricted file) is untouched, and the guard conditions are provably no-ops here —
+both guard files exist in this repo on every branch.
+
+What was actually verified (this repo, not a second live GitHub install — creating a second live repo,
+Apps, and secrets is outside what an automated implementation run does on its own authority): the script
+run against a fresh local git checkout produces valid YAML, every identity string substituted with none of
+this repo's own left over, cross-repo references qualified (including bare `#N` refs, not just
+`repo#N`/`owner/repo#N` forms), and the templated `.aar-ci/checks.sh` + `.github/scripts/canonical_login_smoke.sh`
++ the skill-consistency smoke all pass clean against the result when run over those templated files' own
+paths. Running the templated `.aar-ci/checks.sh` given `AGENTS.md` as the changed path, and again given
+`README.md`, both now pass clean — confirming the existence guards above actually make the target's copy
+diverge from upstream only where upstream could never pass anyway. Also verified: bootstrapping a throwaway
+target, adding a target-owned `plugins/myplugin/skills/hello/SKILL.md`, and confirming
+`.aar-ci/skill_consistency_check.sh`, `.aar-ci/checks.sh` against that new file, and `.aar-ci/checks.sh`
+against `AGENTS.md`/`README.md` all now pass (they previously failed permanently once such a file existed,
+since check 1f runs the skill checker unconditionally on every invocation).
+The remaining acceptance bar — flip `ready` on a real fresh repo and get a merged PR — needs the
+Apps/secrets/branch-protection above in place first; treat this repository's own configuration as the
+reference implementation for what "working" looks like end-to-end.
