@@ -125,7 +125,13 @@ jobs:
           allow_json=$(printf '%s\n' $ALLOWLIST | jq -R . | jq -s .)
 
           issue_body=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""')
-          comments_json=$(gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" --paginate | jq -s 'add // []')
+          # A GitHub API degradation returns an error OBJECT instead of a paginate array; a bare
+          # `add // []` would silently pass it through as if it were real (empty-ish) data instead of
+          # failing closed. Detect the non-array shape explicitly and refuse to proceed on it.
+          if ! comments_json=$(gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" --paginate | jq -s '(if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []'); then
+            echo "::error::issue #$ISSUE_NUMBER: fetching comments failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
 
           kept=$(jq --argjson allow "$allow_json" '
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;

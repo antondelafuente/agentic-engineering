@@ -172,9 +172,13 @@ jobs:
           # source the bash helper).
           last_marker_comment() {
             local n="$1" marker="$2"
+            # A GitHub API degradation returns an error OBJECT instead of a paginate array; `add`
+            # would object-merge it past a bare `// []` guard. Detect the non-array shape explicitly
+            # (every caller already wraps this call in `if !` and fault-isolates the one PR on failure).
             gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s --arg marker "$marker" '
               def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-              add // [] | map(select(((.user.login | canon_login) == "codex-engineer[bot]") and ((.body // "") | startswith($marker))))
+              (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                | map(select(((.user.login | canon_login) == "codex-engineer[bot]") and ((.body // "") | startswith($marker))))
                 | sort_by(.created_at) | last
             '
           }
@@ -199,7 +203,8 @@ jobs:
             # absence (which would trigger a spurious re-dispatch).
             local label_ts
             if ! label_ts=$(gh api "repos/$REPO/issues/$n/events" --paginate | jq -s -r '
-              add // [] | map(select(.event == "labeled" and .label.name == "needs-senior-engineer")) | sort_by(.created_at) | last | .created_at // empty
+              (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                | map(select(.event == "labeled" and .label.name == "needs-senior-engineer")) | sort_by(.created_at) | last | .created_at // empty
             '); then
               echo "::warning::PR #$n: reading needs-senior-engineer label history failed; skipping this tick"
               return 1
@@ -212,7 +217,8 @@ jobs:
             local comment_ts
             if ! comment_ts=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s -r '
               def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-              add // [] | map(select((.user.login | canon_login) == "senior-engineer-agent[bot]")) | sort_by(.created_at) | last | .created_at // empty
+              (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                | map(select((.user.login | canon_login) == "senior-engineer-agent[bot]")) | sort_by(.created_at) | last | .created_at // empty
             '); then
               echo "::warning::PR #$n: reading senior-engineer-agent comment history failed; skipping this tick"
               return 1
@@ -346,7 +352,8 @@ jobs:
             local mentions_json
             if ! mentions_json=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s --arg since "$review_submitted_at" --argjson allow "$DISPATCH_MENTION_ALLOW" '
               def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-              (add // []) | map(select(((.user.login | canon_login) as $c | ($allow | index($c)) != null)
+              ((if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // [])
+                | map(select(((.user.login | canon_login) as $c | ($allow | index($c)) != null)
                 and ((.body // "") | contains("@claude-code-engineer"))
                 and (.created_at >= $since)))
                 | sort_by(.created_at)
@@ -407,7 +414,8 @@ jobs:
             local review_info
             if ! review_info=$(gh api "repos/$REPO/pulls/$n/reviews" --paginate | jq -s --arg head "$head" '
               def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-              (add // []) | map(select((.user.login | canon_login) == "codex-engineer[bot]"))
+              ((if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // [])
+                | map(select((.user.login | canon_login) == "codex-engineer[bot]"))
                 | {at_head: (map(select(.commit_id == $head)) | sort_by(.submitted_at) | last), all: .}
             '); then
               echo "::warning::PR #$n: reading review history failed; skipping this tick"

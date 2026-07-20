@@ -121,8 +121,18 @@ jobs:
           workdir=$(mktemp -d)
           trap 'rm -rf "$workdir"' EXIT
 
-          gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s 'add // []' > "$workdir/reviews.json"
-          gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s 'add // []' > "$workdir/comments.json"
+          # A GitHub API degradation returns an error OBJECT instead of a paginate array; a bare
+          # `add // []` would silently write it into reviews.json/comments.json as if it were real
+          # (empty-ish) data instead of failing closed. Detect the non-array shape explicitly and
+          # refuse to proceed on it.
+          if ! gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s '(if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []' > "$workdir/reviews.json"; then
+            echo "::error::PR #$PR_NUMBER: fetching reviews failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
+          if ! gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s '(if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []' > "$workdir/comments.json"; then
+            echo "::error::PR #$PR_NUMBER: fetching comments failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
 
           # jq can't source canonical-login.sh's bash function, so the same "app/<slug>" -> "<slug>[bot]"
           # remap is duplicated here as a jq def (mirrors review-on-pr.yml's own canon_login jq def).

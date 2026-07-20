@@ -165,24 +165,39 @@ jobs:
         run: |
           set -euo pipefail
 
-          last_approved_ts=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s -r '
+          # A GitHub API degradation returns an error OBJECT instead of a paginate array; `add` would
+          # object-merge it past a bare `// []` guard. Detect the non-array shape explicitly and fail
+          # this run closed rather than crash on an incidental type error or silently misbehave.
+          if ! last_approved_ts=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s -r '
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-            add // [] | map(select(.state == "APPROVED" and ((.user.login | canon_login) == "codex-engineer[bot]")))
+            (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+              | map(select(.state == "APPROVED" and ((.user.login | canon_login) == "codex-engineer[bot]")))
               | sort_by(.submitted_at) | last | .submitted_at // ""
-          ')
-          last_human_clear_ts=$(gh api "repos/$REPO/issues/$PR_NUMBER/events" --paginate | jq -s -r '
-            add // [] | map(select(.event == "unlabeled" and .label.name == "needs-human"))
+          '); then
+            echo "::error::PR #$PR_NUMBER: reading approved-review history failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
+          if ! last_human_clear_ts=$(gh api "repos/$REPO/issues/$PR_NUMBER/events" --paginate | jq -s -r '
+            (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+              | map(select(.event == "unlabeled" and .label.name == "needs-human"))
               | sort_by(.created_at) | last | .created_at // ""
-          ')
+          '); then
+            echo "::error::PR #$PR_NUMBER: reading needs-human clearance history failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
           reset_ts="$last_approved_ts"
           if [[ "$last_human_clear_ts" > "$reset_ts" ]]; then
             reset_ts="$last_human_clear_ts"
           fi
 
-          prior_count=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg reset "$reset_ts" '
+          if ! prior_count=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg reset "$reset_ts" '
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-            add // [] | map(select(((.user.login | canon_login) == "senior-engineer-agent[bot]") and (.created_at > $reset))) | length
-          ')
+            (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+              | map(select(((.user.login | canon_login) == "senior-engineer-agent[bot]") and (.created_at > $reset))) | length
+          '); then
+            echo "::error::PR #$PR_NUMBER: reading senior-engineer-agent adjudication comment history failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
           count=$((prior_count + 1))
           echo "senior-engineer has posted $prior_count adjudication comment(s) on PR #$PR_NUMBER since ${reset_ts:-the PR opened}; this run would be summons #$count"
           if [ "$prior_count" -ge 2 ]; then
@@ -299,8 +314,17 @@ jobs:
           set -euo pipefail
           ALLOW='["antondelafuente","codex-engineer[bot]","claude-code-engineer[bot]","senior-engineer-agent[bot]"]'
 
-          reviews_json=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s 'add // []')
-          comments_json=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s 'add // []')
+          # A GitHub API degradation returns an error OBJECT instead of a paginate array; a bare
+          # `add // []` would silently pass it through as if it were real (empty-ish) data instead of
+          # failing closed. Detect the non-array shape explicitly and refuse to proceed on it.
+          if ! reviews_json=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate | jq -s '(if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []'); then
+            echo "::error::PR #$PR_NUMBER: fetching reviews failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
+          if ! comments_json=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s '(if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []'); then
+            echo "::error::PR #$PR_NUMBER: fetching comments failed (transient gh api error); refusing to proceed"
+            exit 1
+          fi
 
           # jq can't source canonical-login.sh's bash function, so the same "app/<slug>" -> "<slug>[bot]"
           # remap is duplicated here as a jq def (mirrors address-review.yml's / review-on-pr.yml's own
@@ -476,20 +500,28 @@ jobs:
           set -euo pipefail
           case "$STATUS" in
             guided)
-              found=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg started "$STARTED_AT" '
-                add // [] | any(.[]; .user.login == "senior-engineer-agent[bot]"
-                  and .created_at > $started
-                  and (.body | contains("@claude-code-engineer")))
-              ')
+              if ! found=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg started "$STARTED_AT" '
+                (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                  | any(.[]; .user.login == "senior-engineer-agent[bot]"
+                    and .created_at > $started
+                    and (.body | contains("@claude-code-engineer")))
+              '); then
+                echo "::error::PR #$PR_NUMBER: reading comment history to verify the guided outcome failed (transient gh api error); treating the self-report as unverified/failed"
+                exit 1
+              fi
               if [ "$found" != "true" ]; then
                 echo "::error::status=guided was self-reported for PR #$PR_NUMBER, but no senior-engineer-agent[bot] comment mentioning @claude-code-engineer created after $STARTED_AT was found -- treating the self-report as unverified/failed"
                 exit 1
               fi
               ;;
             escalated)
-              label_added_now=$(gh api "repos/$REPO/issues/$PR_NUMBER/events" --paginate | jq -s --arg started "$STARTED_AT" '
-                add // [] | any(.[]; .event == "labeled" and .label.name == "needs-human" and .created_at > $started)
-              ')
+              if ! label_added_now=$(gh api "repos/$REPO/issues/$PR_NUMBER/events" --paginate | jq -s --arg started "$STARTED_AT" '
+                (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                  | any(.[]; .event == "labeled" and .label.name == "needs-human" and .created_at > $started)
+              '); then
+                echo "::error::PR #$PR_NUMBER: reading label history to verify the escalated outcome failed (transient gh api error); treating the self-report as unverified/failed"
+                exit 1
+              fi
               has_label=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels \
                 | jq -e 'any(.labels[]; .name == "needs-human")' >/dev/null 2>&1 && echo true || echo false)
               if [ "$has_label" != "true" ] || [ "$label_added_now" != "true" ]; then
@@ -500,13 +532,17 @@ jobs:
               # the prompt requires each as its own literal bold label (agentic-engineering#65 round 3, P0),
               # so any comment merely existing is not enough: it must carry all four labels to count as the
               # structured escalation the label mutation below is gated on.
-              has_comment=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg started "$STARTED_AT" '
-                add // [] | any(.[]; .user.login == "senior-engineer-agent[bot]" and .created_at > $started
-                  and (.body | contains("**Decision needed:**"))
-                  and (.body | contains("**Options:**"))
-                  and (.body | contains("**Lean:**"))
-                  and (.body | contains("**Default if unanswered:**")))
-              ')
+              if ! has_comment=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s --arg started "$STARTED_AT" '
+                (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                  | any(.[]; .user.login == "senior-engineer-agent[bot]" and .created_at > $started
+                    and (.body | contains("**Decision needed:**"))
+                    and (.body | contains("**Options:**"))
+                    and (.body | contains("**Lean:**"))
+                    and (.body | contains("**Default if unanswered:**")))
+              '); then
+                echo "::error::PR #$PR_NUMBER: reading comment history to verify the escalated outcome's structured comment failed (transient gh api error); treating the self-report as unverified/failed"
+                exit 1
+              fi
               if [ "$has_comment" != "true" ]; then
                 echo "::error::status=escalated was self-reported for PR #$PR_NUMBER, but no senior-engineer-agent[bot] comment created after $STARTED_AT carrying all four required labels (Decision needed / Options / Lean / Default if unanswered) was found -- a comment lacking the full structure is not the escalation AGENTS.md promises; treating the self-report as unverified/failed"
                 exit 1

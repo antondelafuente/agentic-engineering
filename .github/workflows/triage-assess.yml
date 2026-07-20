@@ -936,11 +936,19 @@ jobs:
             # identity (either login representation the GitHub API uses) is treated as "our" existing
             # assessment comment to PATCH. Unfiltered, an outsider's marker-shaped comment on this public
             # repo would get silently overwritten by our next PATCH instead of us creating our own comment.
-            existing_id=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s --arg marker "$ASSESSMENT_MARKER_PREFIX" '
+            # A GitHub API degradation returns an error OBJECT instead of a paginate array; `add`
+            # would object-merge it past a bare `// []` guard and this ticket's lookup would either
+            # crash the whole loop (discarding every other ticket's already-rendered comment this run)
+            # or silently misbehave. Detect the non-array shape explicitly and skip only this ticket.
+            if ! existing_id=$(gh api "repos/$REPO/issues/$n/comments" --paginate | jq -s --arg marker "$ASSESSMENT_MARKER_PREFIX" '
               def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-              add // [] | map(select(((.user.login // "" | canon_login) == "claude-code-engineer[bot]") and ((.body // "") | startswith($marker))))
+              (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+                | map(select(((.user.login // "" | canon_login) == "claude-code-engineer[bot]") and ((.body // "") | startswith($marker))))
                 | sort_by(.created_at) | last | .id // empty
-            ')
+            '); then
+              echo "::warning::ticket #$n: existing-comment lookup failed (transient gh api error); skipping this ticket this run, will retry next run"
+              continue
+            fi
             if [ -n "$existing_id" ]; then
               gh api "repos/$REPO/issues/comments/$existing_id" -X PATCH -f body="$body" > /dev/null
               echo "updated existing assessment comment on #$n (comment $existing_id)"
@@ -1095,11 +1103,18 @@ jobs:
 
           # Author-filtered upsert target: only a comment actually authored by the claude engineer App
           # identity is treated as "our" existing rollup comment to PATCH.
-          existing_id=$(gh api "repos/$REPO/issues/${DIGEST_ISSUE}/comments" --paginate | jq -s --arg marker "$MARKER" '
+          # Same non-array-response guard as post-results: a GitHub API degradation returning an error
+          # object here must not silently pass `add // []` and be treated as "no existing rollup
+          # comment", which would post a duplicate rather than updating the real one.
+          if ! existing_id=$(gh api "repos/$REPO/issues/${DIGEST_ISSUE}/comments" --paginate | jq -s --arg marker "$MARKER" '
             def canon_login: if startswith("app/") then (.[4:] + "[bot]") else . end;
-            add // [] | map(select(((.user.login // "" | canon_login) == "claude-code-engineer[bot]") and ((.body // "") | startswith($marker))))
+            (if (all(.[]; type == "array")) then add else error("gh api returned a non-array response (likely a transient API error); refusing to proceed") end) // []
+              | map(select(((.user.login // "" | canon_login) == "claude-code-engineer[bot]") and ((.body // "") | startswith($marker))))
               | sort_by(.created_at) | last | .id // empty
-          ')
+          '); then
+            echo "::error::digest rollup comment #${DIGEST_ISSUE}: existing-comment lookup failed (transient gh api error); refusing to post, which could otherwise duplicate the rollup comment"
+            exit 1
+          fi
           if [ -n "$existing_id" ]; then
             gh api "repos/$REPO/issues/comments/$existing_id" -X PATCH -f body="$body" > /dev/null
             echo "updated rollup digest comment on #${DIGEST_ISSUE} (comment $existing_id)"
