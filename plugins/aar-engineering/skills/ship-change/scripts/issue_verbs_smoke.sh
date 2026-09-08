@@ -1,5 +1,6 @@
 #!/bin/bash
-# issue_verbs_smoke.sh — unit-style smoke for the narrow engineer MAINTAINER verbs (#164, #76):
+# issue_verbs_smoke.sh — unit-style smoke for the narrow engineer MAINTAINER verbs
+# (antondelafuente/automated-researcher#164, #76):
 #   wf.sh issue <fam> close|label|dispose|edit
 # Self-contained: fake gh, no network and no real tokens. Asserts each verb (a) routes through the ENGINEER
 # token (not the ambient owner token), (b) refuses any flag/subcommand outside its allowlist (the #91 model),

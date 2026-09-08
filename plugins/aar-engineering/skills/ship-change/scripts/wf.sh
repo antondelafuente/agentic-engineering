@@ -869,9 +869,9 @@ issue_number_from_gh_issue_args(){  # issue_number_from_gh_issue_args <gh issue 
     esac
   done
 }
-# Narrow engineer MAINTAINER verbs (#164): close|label|dispose|edit under the engineer identity, each with a
-# FIXED validated arg set and NO arbitrary-arg passthrough (the #91 hardening model). Called from the `issue)`
-# arm.
+# Narrow engineer MAINTAINER verbs (antondelafuente/automated-researcher#164): close|label|dispose|edit under
+# the engineer identity, each with a FIXED validated arg set and NO arbitrary-arg passthrough (the
+# antondelafuente/automated-researcher#91 hardening model). Called from the `issue)` arm.
 #   close   <N> -R <repo> [-c|--comment <text>] [-r|--reason completed|"not planned"|duplicate] [--duplicate-of <N|url>]
 #   label   <N> -R <repo> [--add-label <L>]… [--remove-label <L>]…   (≥1 add/remove)
 #   dispose <N> -R <repo> --label <L> --body-line "<key>: <val>"     (atomic disposition: one label + one
@@ -924,7 +924,7 @@ issue_maintainer_verb(){
       --body-file=*) [ "$verb" = edit ] || die "wf.sh issue $verb: --body-file is only valid for 'edit'"; bodyfile=${a#--body-file=} ;;
       --title)              [ "$verb" = edit ] || die "wf.sh issue $verb: --title is only valid for 'edit'"; want=title ;;
       --title=*) [ "$verb" = edit ] || die "wf.sh issue $verb: --title is only valid for 'edit'"; title=${a#--title=} ;;
-      -*) die "wf.sh issue $verb: flag '$a' is not allowed (no arbitrary passthrough — #91 model). Permitted: close[-R -c -r --duplicate-of] label[-R --add-label --remove-label] dispose[-R --label --body-line] edit[-R --body-file --title]" ;;
+      -*) die "wf.sh issue $verb: flag '$a' is not allowed (no arbitrary passthrough — antondelafuente/automated-researcher#91 model). Permitted: close[-R -c -r --duplicate-of] label[-R --add-label --remove-label] dispose[-R --label --body-line] edit[-R --body-file --title]" ;;
       *) [ -z "$num" ] || die "wf.sh issue $verb: unexpected extra positional '$a' (only one issue number)"; num=$a ;;
     esac
   done
@@ -2176,8 +2176,9 @@ issue)          # wf.sh issue <claude|codex> <gh issue args…>   — file/comme
   check_author "$AUTHOR"
   [ $# -gt 0 ] || die "no gh issue args given (e.g. create -R owner/repo -t '…' -b '…' -l <label>)"
   GHSUB=$1
-  # Narrow MAINTAINER verbs (#164 — blocking predecessor of the #149 gh write-guard). close|label|dispose|edit
-  # let triage-feedback and wf.sh do tracker maintenance under the ENGINEER identity once the guard makes the
+  # Narrow MAINTAINER verbs (antondelafuente/automated-researcher#164 — blocking predecessor of the
+  # antondelafuente/automated-researcher#149 gh write-guard). close|label|dispose|edit let triage-feedback
+  # and wf.sh do tracker maintenance under the ENGINEER identity once the guard makes the
   # ambient owner token read-only. Each has a FIXED, validated arg set and NO arbitrary-arg passthrough —
   # preserving the #91 hardening model (allowlisted flags only; no destructive/interactive surface). They have
   # their own arg shapes (and dispose is multi-step), so they run in a dedicated helper, NOT the create|comment
