@@ -1,6 +1,6 @@
 #!/bin/bash
-# issue_verbs_smoke.sh — unit-style smoke for the narrow engineer MAINTAINER verbs (#164):
-#   wf.sh issue <fam> close|label|dispose
+# issue_verbs_smoke.sh — unit-style smoke for the narrow engineer MAINTAINER verbs (#164, #76):
+#   wf.sh issue <fam> close|label|dispose|edit
 # Self-contained: fake gh, no network and no real tokens. Asserts each verb (a) routes through the ENGINEER
 # token (not the ambient owner token), (b) refuses any flag/subcommand outside its allowlist (the #91 model),
 # and (c) for dispose, sets BOTH a label and an idempotent body line.
@@ -176,6 +176,36 @@ check "dispose does NOT remove the non-disposition 'bug' type label" "! grep -q 
 
 echo "=== dispose: 'parked-reason' is a valid key (only the LABEL is restricted to dispositions) ==="
 check "parked-reason key was accepted above" "[ $rc -eq 0 ]"
+
+echo "=== edit: replaces the body (+ optional title) through the engineer token ==="
+: > "$GH_FAKE_LOG"
+printf 'replacement body text\n' > "$TMP/newbody-in.txt"
+out=$(env "${ENGENV[@]}" bash "$WF" issue claude edit 42 -R example/repo --body-file "$TMP/newbody-in.txt" --title "new title" 2>&1); rc=$?
+echo "$out"
+check "edit exits zero" "[ $rc -eq 0 ]"
+check "edit used the claude engineer token" "grep -q 'TOKEN=claude-token ARGS=issue edit 42' \"\$GH_FAKE_LOG\""
+check "edit passed --body-file <path>" "grep -q -- \"--body-file $TMP/newbody-in.txt\" \"\$GH_FAKE_LOG\""
+check "edit passed --title" "grep -q -- '--title new title' \"\$GH_FAKE_LOG\""
+
+echo "=== edit: --body-file is required ==="
+out=$(env "${ENGENV[@]}" bash "$WF" issue claude edit 42 -R example/repo 2>&1); rc=$?
+echo "$out"
+check "edit without --body-file exits nonzero" "[ $rc -ne 0 ]"
+
+echo "=== edit: rejects a --body-file path that is not readable ==="
+out=$(env "${ENGENV[@]}" bash "$WF" issue claude edit 42 -R example/repo --body-file "$TMP/does-not-exist.txt" 2>&1); rc=$?
+echo "$out"
+check "edit with unreadable --body-file exits nonzero" "[ $rc -ne 0 ]"
+
+echo "=== edit: a flag from the wrong verb (--body-line) is rejected ==="
+out=$(env "${ENGENV[@]}" bash "$WF" issue claude edit 42 -R example/repo --body-line "x: y" 2>&1); rc=$?
+echo "$out"
+check "edit --body-line (dispose-only) exits nonzero" "[ $rc -ne 0 ]"
+
+echo "=== allowlist: edit's --body-file on close (wrong verb) is rejected ==="
+out=$(env "${ENGENV[@]}" bash "$WF" issue claude close 42 -R example/repo --body-file "$TMP/newbody-in.txt" 2>&1); rc=$?
+echo "$out"
+check "close --body-file (edit-only) exits nonzero" "[ $rc -ne 0 ]"
 
 echo "=== empty supplied value fails closed (automation passing an unset var) ==="
 out=$(env "${ENGENV[@]}" bash "$WF" issue claude close 42 -R example/repo -r "" 2>&1); rc=$?

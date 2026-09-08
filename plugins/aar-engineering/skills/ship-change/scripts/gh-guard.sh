@@ -31,7 +31,7 @@ guard_die(){
   cat >&2 <<EOF
 BLOCKED (gh write-guard): refusing a GitHub WRITE — \`gh $shape\`.
 GitHub writes go through the engineer identity path:
-  wf.sh issue <claude|codex> create|comment|close|label|dispose …   (Issues / maintainer verbs)
+  wf.sh issue <claude|codex> create|comment|close|label|dispose|edit …   (Issues / maintainer verbs)
   wf.sh open|comment|...|finish <worktree> <family>                  (the ship-change lifecycle)
 See the ship-change skill. For deliberate owner/admin maintenance, source an elevated owner token AND set
 WF_GH_ALLOW_OWNER_WRITE=1 (both are required; the override alone does not grant write capability).

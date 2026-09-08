@@ -135,12 +135,9 @@ if os.path.isfile(WF_PATH):
         if first_stmt and RETIRED_DIE_RE.match(first_stmt):
             continue
         top_verbs.update(m.group(1).split('|'))
-    m = re.search(
-        r"only '([a-zA-Z_-]+)', '([a-zA-Z_-]+)', '([a-zA-Z_-]+)', '([a-zA-Z_-]+)', '([a-zA-Z_-]+)' are allowed",
-        wf_text,
-    )
+    m = re.search(r"only ((?:'[a-zA-Z_-]+',\s*)+'[a-zA-Z_-]+') are allowed", wf_text)
     if m:
-        issue_subverbs.update(m.groups())
+        issue_subverbs.update(re.findall(r"'([a-zA-Z_-]+)'", m.group(1)))
     m = re.search(r'wf\.sh fdispo <worktree> <author> <([a-z|]+)>', wf_text)
     if m:
         fdispo_subverbs.update(m.group(1).split('|'))
