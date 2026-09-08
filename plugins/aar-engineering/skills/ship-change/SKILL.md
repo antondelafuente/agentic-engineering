@@ -178,9 +178,11 @@ workflow if unsure. `wf.sh` is `scripts/wf.sh` in this skill.
 # 0. An Issue exists (the backlog item). Create it if not — author it as the ENGINEER identity, not the
 #    human owner: wf.sh issue <claude|codex> create -R <owner/repo> -t "..." -b "..."  → note its number <N>.
 #    Engineer-identity tracker MAINTENANCE uses the same path with NARROW, allowlisted verbs (no arbitrary
-#    `gh` passthrough — the antondelafuente/automated-researcher#91 model): `wf.sh issue <fam> comment|close|label|dispose`. `dispose <N> --label
+#    `gh` passthrough — the antondelafuente/automated-researcher#91 model): `wf.sh issue <fam> comment|close|label|dispose|edit`. `dispose <N> --label
 #    <disp> --body-line "blocked-by: #M"` atomically sets one disposition label + an idempotent body line (the
-#    `blocked` path). These exist so the antondelafuente/automated-researcher#149 gh write-guard never strands triage-feedback's closes/labels.
+#    `blocked` path). `edit <N> --body-file <path> [--title <t>]` replaces the issue body (e.g. applying a
+#    triage-proposed replacement body) under the engineer identity. These exist so the
+#    antondelafuente/automated-researcher#149 gh write-guard never strands triage-feedback's closes/labels/edits.
 #
 #    PRE-FLIGHT — before creating the worktree (step 1), read <N>'s disposition. Not `ready` — including
 #    unlabeled/untriaged — STOP: do not implement. Route instead:

@@ -4,8 +4,9 @@
 # stays valid except the one deliberately-injected regression per scenario), then asserts:
 #   - the real repo tree, unmodified, passes clean (the issue's "current main passes clean" bar, made
 #     into an executable regression test rather than a one-time manual check)
-#   - a reintroduced agentic-engineering#51 round-3-style error (a prescribed `wf.sh issue edit`, which
-#     doesn't exist) fails pass 1
+#   - a reintroduced agentic-engineering#51 round-3-style error (a prescribed `wf.sh issue rename`, which
+#     doesn't exist — agentic-engineering#76 made `edit` itself a real sub-verb, so this scenario now uses a
+#     still-nonexistent one) fails pass 1
 #   - a reintroduced agentic-engineering#51 round-8-style error (a contradictory cloud-ship
 #     frontmatter/body pipeline-first assertion) fails pass 3
 #   - an unmarked retired phrase fails pass 4
@@ -71,8 +72,9 @@ BASE=$(fixture baseline)
 expect PASS baseline-real-tree "$BASE"
 
 if [ "$HAVE_PLUGINS" = 1 ]; then
-  # 2. agentic-engineering#51 round-3-style regression: a prescribed `wf.sh issue edit` (no such wf.sh
-  #    verb) — pass 1.
+  # 2. agentic-engineering#51 round-3-style regression: a prescribed `wf.sh issue rename` (no such wf.sh
+  #    verb) — pass 1. (agentic-engineering#76 made `edit` a real sub-verb, so this scenario now injects a
+  #    still-nonexistent one instead.)
   R3=$(fixture round3)
   SC="$R3/plugins/aar-engineering/skills/ship-change/SKILL.md"
   python3 - "$SC" <<'PY'
@@ -81,10 +83,10 @@ p = sys.argv[1]
 text = open(p, encoding="utf-8").read()
 needle = "wf.sh issue <claude|codex> create -R <owner/repo>"
 assert needle in text, "fixture setup: expected ship-change SKILL.md usage line not found"
-text = text.replace(needle, "wf.sh issue <claude|codex> edit -R <owner/repo>", 1)
+text = text.replace(needle, "wf.sh issue <claude|codex> rename -R <owner/repo>", 1)
 open(p, "w", encoding="utf-8").write(text)
 PY
-  expect FAIL round3-wf-issue-edit "$R3" "pass1:.*wf.sh issue ... edit"
+  expect FAIL round3-wf-issue-rename "$R3" "pass1:.*wf.sh issue ... rename"
 
   # 3. agentic-engineering#51 round-8-style regression: an unqualified cloud-ship preference claim and a
   #    pipeline-first subordination claim both injected (self-contained — post-agentic-engineering#51 main
